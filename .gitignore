@@ -1,0 +1,12 @@
+node_modules/
+dxfview/
+converter/build/
+converter/dist/
+build/
+dist/
+*.pyc
+__pycache__/
+*.pkg
+*.pyz
+.vscode/
+.idea/

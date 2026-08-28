@@ -1,0 +1,88 @@
+{
+  "name": "pdf-to-cad",
+  "version": "1.0.0",
+  "description": "High-precision vector PDF to DXF CAD converter",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build-python": "py -3 -m PyInstaller --onefile --name pdf-converter --workpath converter/build --distpath converter/dist converter/converter.py",
+    "pack": "electron-builder --dir",
+    "dist": "npm run build-python && electron-builder",
+    "build:win": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.antigravity.pdftocad",
+    "productName": "PDF to CAD Converter",
+    "copyright": "Copyright © 2026",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "**/*",
+      "!converter/build/**",
+      "!**/*.pyc",
+      "!**/*.pdf",
+      "!**/*.dxf",
+      "!test*"
+    ],
+    "extraResources": [
+      {
+        "from": "converter/dist",
+        "to": "converter/dist",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerHeaderIcon": "assets/icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "PDF to CAD Converter"
+    },
+    "mac": {
+      "icon": "assets/icon.png",
+      "category": "public.app-category.productivity"
+    },
+    "linux": {
+      "icon": "assets/icon.png",
+      "category": "Graphics;Utility;"
+    }
+  },
+  "keywords": [
+    "pdf",
+    "dxf",
+    "cad",
+    "converter"
+  ],
+  "author": "Antigravity",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "dependencies": {
+    "three": "^0.185.1"
+  }
+}

@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF to DXF CAD Converter</title>
+  <link rel="icon" type="image/png" href="assets/icon.png">
+  <link rel="stylesheet" href="index.css">
+  <!-- Google Fonts for premium appearance -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <!-- Window Drag Area for Premium Custom Title Bar -->
+  <div class="window-titlebar">
+    <div class="titlebar-logo">
+      <img src="assets/logo.png" alt="Logo" class="app-logo-icon" width="22" height="22" style="border-radius: 5px; object-fit: cover; box-shadow: 0 0 10px rgba(0, 242, 254, 0.35); flex-shrink: 0;">
+      <span>PDF-to-CAD Studio</span>
+    </div>
+  </div>
+
+  <div class="dashboard-container">
+    <!-- 界面已移除 sidebar，全屏给到绘图区域 -->
+
+    <!-- 右侧：图纸比对大视口 -->
+    <main class="main-preview">
+      <!-- 顶部操作控制栏 -->
+      <div class="preview-control-bar">
+        <div class="control-group-left">
+          <!-- 新增：弹窗触发按钮 -->
+          <button class="btn btn-primary btn-small" id="btn-open-import">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;">
+              <path d="M12 5v14M5 12h14"/>
+            </svg>
+            导入并转换
+          </button>
+          <button class="btn btn-secondary btn-small" id="btn-open-history">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+            历史记录
+          </button>
+          <button class="btn btn-secondary btn-small" id="btn-open-subgraphs" style="margin-left: 8px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;">
+              <path d="M4 22h14a2 2 0 0 0 2-2V7.5L14.5 2H6a2 2 0 0 0-2 2v4"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <path d="M2 15h10"></path>
+              <path d="M9 18l3-3-3-3"></path>
+            </svg>
+            已存子图
+          </button>
+          <button class="btn btn-outline btn-small" id="btn-platform-test" style="margin-left: 8px;" title="测试第三方平台登录与连通性">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;">
+              <path d="M9 11l3 3L22 4"></path>
+              <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+            </svg>
+            平台测试
+          </button>
+          <div class="toolbar-divider" style="height:20px; width:1px; background:#e2e8f0; margin:0 8px;"></div>
+          
+          <span class="control-label">缩放</span>
+          <button class="zoom-btn" id="btn-zoom-out">−</button>
+          <input type="range" class="zoom-slider" id="zoom-slider" min="10" max="1000" value="100">
+          <button class="zoom-btn" id="btn-zoom-in">+</button>
+          <button class="control-btn" id="btn-fit-viewport">适应窗口</button>
+        </div>
+        
+        <div class="control-group-right">
+          <span class="control-label">查看模式</span>
+          <div class="toggle-group" id="mode-toggle-group">
+            <button class="toggle-btn" id="btn-mode-single">单屏模式</button>
+            <button class="toggle-btn active" id="btn-mode-compare">对比模式</button>
+          </div>
+          
+          <div class="toggle-group hidden" id="single-tabs-group">
+            <button class="toggle-btn active" id="btn-tab-pdf">原 PDF</button>
+            <button class="toggle-btn" id="btn-tab-dxf">CAD DXF</button>
+          </div>
+          
+          <div class="layer-badges">
+            <span class="badge badge-lines">线条</span>
+            <span class="badge badge-curves">多段线</span>
+            <span class="badge badge-texts">文字</span>
+          </div>
+
+          <!-- 编辑器导出按钮 -->
+          <button class="btn btn-primary btn-small hidden" id="btn-export-edited" title="导出当前转换/编辑后的完整 DXF 文件">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            导出 DXF
+          </button>
+          
+          <button class="btn btn-primary btn-small hidden" id="btn-export-subgraph" title="导出选中局部节点" style="background-color: #f59e0b; border-color: #f59e0b;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px">
+              <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/>
+              <polyline points="16 6 12 2 8 6"/>
+              <line x1="12" y1="2" x2="12" y2="15"/>
+            </svg>
+            导出局部节点
+          </button>
+        </div>
+      </div>
+
+      <!-- 画布大容器区域 -->
+      <div class="preview-canvas-area">
+        <!-- 欢迎/拖拽占位面板 -->
+        <div class="preview-placeholder" id="preview-placeholder">
+          <div class="drag-drop-zone">
+            <div class="placeholder-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/>
+                <line x1="16" y1="17" x2="8" y2="17"/>
+                <polyline points="10 9 9 9 8 9"/>
+              </svg>
+            </div>
+            <h2>拖拽 PDF 到此处开始</h2>
+            <p>或点击左侧侧边栏中的导入按钮</p>
+          </div>
+        </div>
+
+        <!-- 对照画布容器 (初始隐藏) -->
+        <div class="comparison-container hidden" id="comparison-container">
+          <!-- 左侧：PDF 预览 -->
+          <div class="preview-panel">
+            <div class="preview-panel-header">
+              <span>原 PDF 图纸</span>
+              <span class="preview-tip">同步缩放与平移</span>
+            </div>
+            <div class="canvas-container">
+              <canvas id="pdf-canvas"></canvas>
+            </div>
+          </div>
+          <!-- 右侧：DXF 预览 + 编辑器 -->
+          <div class="preview-panel">
+            <div class="preview-panel-header">
+              <span>转换后的 DXF CAD</span>
+              <span class="preview-tip" id="editor-status-tip">同步缩放与平移</span>
+            </div>
+            <!-- 编辑工具栏 -->
+            <div class="editor-toolbar hidden" id="editor-toolbar">
+              <button class="tool-btn active" id="tool-select" title="选择与移动 (V)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3l14 9-7 2-3 7z"/></svg>
+                <span>选择</span>
+              </button>
+              <button class="tool-btn" id="tool-node" title="添加变电站/节点 (N)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="7"/>
+                  <circle cx="12" cy="12" r="2.5" fill="currentColor"/>
+                </svg>
+                <span>加节点</span>
+              </button>
+              <button class="tool-btn" id="tool-line" title="画连接线 (L)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="19" x2="19" y2="5"/></svg>
+                <span>连线</span>
+              </button>
+              <button class="tool-btn" id="tool-rect" title="矩形 (R)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="1"/></svg>
+                <span>矩形</span>
+              </button>
+              <button class="tool-btn" id="tool-text" title="文字 (T)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+                <span>文字</span>
+              </button>
+              <div class="toolbar-divider"></div>
+              <button class="tool-btn tool-btn-danger" id="tool-delete" title="删除选中 (Del)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+                <span>删除</span>
+              </button>
+              <button class="tool-btn" id="tool-undo" title="撤销 (Ctrl+Z)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.63"/></svg>
+                <span>撤销</span>
+              </button>
+            </div>
+            <div class="canvas-container">
+              <canvas id="dxf-canvas"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- 节点拖动距离实时标注 HUD 悬浮指示器 -->
+        <div class="drag-hud hidden" id="drag-hud"></div>
+      </div>
+    </main>
+  </div>
+
+  <!-- 属性面板浮层 -->
+  <div class="prop-panel hidden" id="prop-panel">
+    <div class="prop-panel-header">
+      <span id="prop-panel-title">图元属性</span>
+      <button class="prop-close-btn" id="btn-prop-close">✕</button>
+    </div>
+    <div class="prop-body" id="prop-body">
+      <!-- 动态生成 -->
+    </div>
+  </div>
+
+  <!-- 文字编辑浮动输入框 -->
+  <input type="text" class="inline-text-editor hidden" id="inline-text-editor" placeholder="输入文字内容...">
+
+  <!-- 右键上下文快捷编辑菜单 -->
+  <div class="context-menu hidden" id="context-menu">
+    <div class="context-menu-header">
+      <span class="context-menu-icon" id="ctx-header-icon">🏷️</span>
+      <span class="context-menu-name truncate" id="ctx-header-name">变电站节点</span>
+    </div>
+    <div class="context-menu-divider"></div>
+    <button class="context-menu-item" id="ctx-btn-edit-prop">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+      <span>编辑属性参数</span>
+    </button>
+    <button class="context-menu-item" id="ctx-btn-rename">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+      <span>重命名节点名称</span>
+    </button>
+    <button class="context-menu-item" id="ctx-btn-draw-line">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="19" x2="19" y2="5"/></svg>
+      <span>从此节点画连线</span>
+    </button>
+    <div class="context-menu-submenu-wrapper" id="ctx-type-wrapper">
+      <button class="context-menu-item">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/></svg>
+        <span>切换类型 / 符号</span>
+        <span class="context-menu-arrow">❯</span>
+      </button>
+      <div class="context-submenu">
+        <button class="context-menu-item" data-type="110kV">110kV 变电站 (单圆)</button>
+        <button class="context-menu-item" data-type="220kV">220kV 变电站 (双圆)</button>
+        <button class="context-menu-item" data-type="500kV">500kV 变电站 (三圆)</button>
+        <button class="context-menu-item" data-type="PLANT">电厂 / 枢纽 (矩形)</button>
+        <button class="context-menu-item" data-type="DIAMOND">开闭所 (菱形)</button>
+        <button class="context-menu-item" data-type="TRIANGLE">发电单元 (三角形)</button>
+        <button class="context-menu-item" data-type="POINT">普通监测点 (圆点)</button>
+      </div>
+    </div>
+    <div class="context-menu-divider"></div>
+    <button class="context-menu-item context-menu-item-danger" id="ctx-btn-delete">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+      <span>删除此节点</span>
+    </button>
+  </div>
+
+  <!-- 导入与转换弹窗 (Modal) -->
+  <div class="modal-overlay hidden" id="convert-modal">
+    <div class="modal-container">
+      <div class="modal-header">
+        <h2>导入 PDF 并转换为 CAD</h2>
+        <button class="modal-close-btn" id="btn-close-convert-modal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="modal-config-state">
+          <!-- 初始选择文件 -->
+          <div class="upload-zone" id="modal-upload-zone">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="12" y1="18" x2="12" y2="12"/>
+              <polyline points="9 15 12 12 15 15"/>
+            </svg>
+            <p>点击选择或拖拽 PDF 图纸到此处</p>
+          </div>
+
+          <!-- 文件配置面板 -->
+          <div class="config-panel hidden" id="config-panel">
+            <div class="panel-section">
+              <div class="info-row">
+                <span class="info-label">源文件:</span>
+                <span class="info-val truncate" id="pdf-path-text" title="">未选择文件</span>
+              </div>
+            </div>
+            <div class="panel-section">
+              <label for="output-path-input">输出 DXF 路径:</label>
+              <div class="path-input-group">
+                <input type="text" id="output-path-input" readonly placeholder="选择输出目标路径...">
+                <button type="button" class="btn btn-secondary" id="btn-browse-output">浏览</button>
+              </div>
+            </div>
+            <div class="action-row" style="margin-top:20px; justify-content: flex-end;">
+              <button type="button" class="btn btn-secondary" id="btn-cancel-config">取消</button>
+              <button type="button" class="btn btn-primary" id="btn-convert">
+                <span>开始转换</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 转换状态面板 -->
+        <div class="status-panel hidden" id="status-panel">
+          <!-- 正在转换 -->
+          <div class="status-state" id="state-loading">
+            <div class="spinner-container">
+              <div class="spinner"></div>
+              <div class="spinner-glow"></div>
+            </div>
+            <h4>正在转换中...</h4>
+            <p>请稍候，转换完成后窗口将自动关闭。</p>
+          </div>
+
+          <!-- 转换成功 -->
+          <div class="status-state hidden" id="state-success">
+            <div class="status-icon success-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+            </div>
+            <h4>转换成功</h4>
+            <p>已写入数据库，即将自动关闭并渲染图纸...</p>
+            <div class="action-row" style="margin-top: 15px;">
+              <button class="btn btn-secondary btn-small" id="btn-open-explorer">打开文件夹</button>
+            </div>
+          </div>
+
+          <!-- 转换失败 -->
+          <div class="status-state hidden" id="state-error">
+            <div class="status-icon error-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </div>
+            <h4>转换失败</h4>
+            <div class="error-container">
+              <code id="error-message">发生未知错误。</code>
+            </div>
+            <button class="btn btn-primary" id="btn-error-reset">重新尝试</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 历史记录弹窗 (Modal) -->
+  <div class="modal-overlay hidden" id="history-modal">
+    <div class="modal-container modal-large">
+      <div class="modal-header">
+        <h2>历史记录 (SQLite)</h2>
+        <div style="display:flex; gap:10px; align-items:center;">
+          <button class="btn btn-secondary btn-small" id="btn-clear-history">清空记录</button>
+          <button class="modal-close-btn" id="btn-close-history-modal">✕</button>
+        </div>
+      </div>
+      <div class="modal-body" style="padding: 0;">
+        <div class="history-table-wrapper">
+          <table class="history-table" id="history-table">
+            <thead>
+              <tr>
+                <th class="col-expand"></th>
+                <th class="col-filename">文件名</th>
+                <th class="col-status">状态</th>
+                <th class="col-time">时间</th>
+                <th class="col-actions">操作</th>
+              </tr>
+            </thead>
+            <tbody id="history-list">
+              <tr><td colspan="5"><div class="empty-history">暂无历史记录</div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 已存子图弹窗 (Modal) -->
+  <div class="modal-overlay hidden" id="subgraphs-modal">
+    <div class="modal-container modal-large">
+      <div class="modal-header">
+        <h2>已存子图</h2>
+        <div style="display:flex; gap:10px; align-items:center;">
+          <button class="modal-close-btn" id="btn-close-subgraphs-modal">✕</button>
+        </div>
+      </div>
+      <div class="modal-body" style="padding: 0;">
+        <div class="history-list-container" id="subgraphs-list">
+          <div class="empty-history">暂无已存子图</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 平台测试结果弹窗 (Modal) -->
+  <div class="modal-overlay hidden" id="platform-test-modal">
+    <div class="modal-container" style="width: 520px;">
+      <div class="modal-header">
+        <h2>第三方平台测试</h2>
+        <button class="modal-close-btn" id="btn-close-platform-test">✕</button>
+      </div>
+      <div class="modal-body" style="padding: 16px;">
+        <div id="platform-test-content"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 导出预览弹窗 (Modal) -->
+  <div class="modal-overlay hidden" id="export-preview-modal">
+    <div class="modal-container modal-large" style="width: 80%; max-width: 900px;">
+      <div class="modal-header">
+        <h2>预览生成的选中节点 CAD 图纸</h2>
+        <button class="modal-close-btn" id="btn-close-export-preview">✕</button>
+      </div>
+      <div class="modal-body" style="padding: 10px; background: #1a1a24;">
+        <!-- 预览画布容器 -->
+        <div class="canvas-container" style="height: 500px; width: 100%; border: 1px solid #333; border-radius: 6px; overflow: hidden; position: relative;">
+          <canvas id="preview-canvas" style="width: 100%; height: 100%;"></canvas>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; padding: 16px; background: white; border-top: 1px solid #eee; border-radius: 0 0 12px 12px;">
+        <div style="flex: 1; display: flex; align-items: center; margin-right: 20px;">
+          <input type="text" id="export-subgraph-name" placeholder="请输入图元节点名称..." class="export-name-input" style="width: 100%; padding: 10px 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='var(--primary)'" onblur="this.style.borderColor='#ccc'" />
+        </div>
+        <div style="display: flex; gap: 12px;">
+          <button class="btn btn-secondary" id="btn-cancel-export">取消</button>
+          <button class="btn btn-primary" id="btn-confirm-export">保存子图</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 自定义全局提示弹窗 (Custom Alert/Confirm Modal) -->
+  <div class="modal-overlay hidden" id="custom-dialog-overlay" style="z-index: 9999;">
+    <div class="modal-container" style="width: 400px; padding: 24px; text-align: center;">
+      <h3 id="custom-dialog-title" style="margin-bottom: 12px; font-size: 18px;">提示</h3>
+      <p id="custom-dialog-message" style="margin-bottom: 24px; color: var(--text-muted); font-size: 14px; line-height: 1.5;"></p>
+      <div class="action-row" style="justify-content: center; gap: 16px; margin-top: 0;">
+        <button class="btn btn-secondary" id="btn-dialog-cancel">取消</button>
+        <button class="btn btn-primary" id="btn-dialog-confirm" style="min-width: 100px;">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="renderer.js"></script>
+</body>
+</html>
