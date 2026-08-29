@@ -1,11 +1,13 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const child_process = require('child_process');
-const { login: platformLogin, httpRequest } = require('./utils/login');
+const { login: platformLogin, loginWithPassword, httpRequest } = require('./utils/login');
 
 let mainWindow;
+let loginWindow;
 let dbPath = '';
+let platformToken = null; // 登录成功后缓存的全局 token
 
 function createWindow() {
   const iconPath = process.platform === 'win32'
@@ -42,15 +44,121 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(() => {
-  dbPath = app.isPackaged 
-    ? path.join(app.getPath('userData'), 'history.db') 
+function createLoginWindow(prefillUsername) {
+  const iconPath = process.platform === 'win32'
+    ? path.join(__dirname, 'assets', 'icon.ico')
+    : path.join(__dirname, 'assets', 'icon.png');
+
+  loginWindow = new BrowserWindow({
+    width: 1400,
+    height: 850,
+    minWidth: 1200,
+    minHeight: 700,
+    icon: iconPath,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false
+    },
+    titleBarStyle: 'hiddenInset',
+    show: false
+  });
+
+  loginWindow.loadFile('login.html', { query: { u: prefillUsername || '' } });
+
+  loginWindow.once('ready-to-show', () => {
+    loginWindow.show();
+  });
+
+  // 用户直接关闭登录窗口 → 退出应用（未登录不允许使用）
+  loginWindow.on('closed', () => {
+    loginWindow = null;
+    if (!mainWindow) {
+      app.quit();
+    }
+  });
+}
+
+// ====== 登录凭据持久化（记住登录状态） ======
+
+function getAuthFilePath() {
+  return path.join(app.getPath('userData'), 'auth.json');
+}
+
+// 登录成功后加密保存凭据（Windows 使用 DPAPI，按当前系统用户加密）
+function saveAuthCredentials(username, password) {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) {
+      console.warn('[Auth] 系统不支持安全存储，跳过保存凭据');
+      return;
+    }
+    const payload = {
+      username,
+      password: safeStorage.encryptString(password).toString('base64'),
+    };
+    fs.writeFileSync(getAuthFilePath(), JSON.stringify(payload), 'utf-8');
+  } catch (e) {
+    console.error('[Auth] 保存凭据失败:', e.message);
+  }
+}
+
+function loadAuthCredentials() {
+  try {
+    const file = getAuthFilePath();
+    if (!fs.existsSync(file) || !safeStorage.isEncryptionAvailable()) return null;
+    const { username, password } = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    return { username, password: safeStorage.decryptString(Buffer.from(password, 'base64')) };
+  } catch (e) {
+    return null;
+  }
+}
+
+function clearAuthCredentials() {
+  try {
+    const file = getAuthFilePath();
+    if (fs.existsSync(file)) fs.unlinkSync(file);
+  } catch (e) { /* ignore */ }
+}
+
+app.whenReady().then(async () => {
+  Menu.setApplicationMenu(null); // 隐藏 File/Edit/View/Window/Help 菜单栏
+  dbPath = app.isPackaged
+    ? path.join(app.getPath('userData'), 'history.db')
     : path.join(__dirname, 'history.db');
-  createWindow();
+
+  // 有保存的凭据时自动登录，成功则直接进主界面
+  const saved = loadAuthCredentials();
+  if (saved) {
+    console.log('[Auth] 检测到已保存凭据，尝试自动登录:', saved.username);
+    const res = await loginWithPassword(saved.username, saved.password);
+    if (res && res.success) {
+      platformToken = res.token;
+      createWindow();
+      return;
+    }
+    console.warn('[Auth] 自动登录失败，显示登录窗口:', res ? res.error : '未知错误');
+    clearAuthCredentials();
+    createLoginWindow(saved.username);
+    return;
+  }
+
+  createLoginWindow();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+      const cred = loadAuthCredentials();
+      if (cred) {
+        loginWithPassword(cred.username, cred.password).then((res) => {
+          if (res && res.success) {
+            platformToken = res.token;
+            createWindow();
+          } else {
+            createLoginWindow(cred.username);
+          }
+        });
+      } else {
+        createLoginWindow();
+      }
     }
   });
 });
@@ -534,6 +642,25 @@ ipcMain.handle('export-dxf-subgraph', async (event, jsonStr, name, pdfHash) => {
 });
 
 // ====== 第三方平台对接 API ======
+
+// 登录界面：用户名 + 密码登录
+ipcMain.handle('login-with-password', async (event, username, password) => {
+  const res = await loginWithPassword(username, password);
+  if (res && res.success) {
+    platformToken = res.token;
+    saveAuthCredentials(username, password); // 记住登录状态，下次启动自动登录
+    // 登录成功：先创建主窗口，再关闭登录窗口
+    if (!mainWindow) createWindow();
+    if (loginWindow && !loginWindow.isDestroyed()) loginWindow.close();
+    return { success: true, user: res.data ? res.data.user : null };
+  }
+  return res;
+});
+
+// 渲染进程获取登录后的平台 token
+ipcMain.handle('get-platform-token', async () => {
+  return platformToken;
+});
 
 // 平台登录
 ipcMain.handle('platform-login', async () => {

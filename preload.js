@@ -46,6 +46,12 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('export-subgraph-to-file', sourcePath),
 
   // ====== 第三方平台对接 ======
+  loginWithPassword: (username, password) =>
+    ipcRenderer.invoke('login-with-password', username, password),
+
+  getPlatformToken: () =>
+    ipcRenderer.invoke('get-platform-token'),
+
   platformLogin: () =>
     ipcRenderer.invoke('platform-login'),
 

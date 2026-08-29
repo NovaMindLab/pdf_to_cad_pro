@@ -4486,18 +4486,18 @@ if (btnExportEdited) {
 // 全局 token 存储
 let platformToken = null;
 
-// 初始化时自动登录
+// 初始化时从主进程获取登录窗口完成登录后的 token
 (async function initPlatform() {
   try {
-    const res = await window.api.platformLogin();
-    if (res && res.success && res.token) {
-      platformToken = res.token;
-      console.log('[平台] 初始化登录成功，token:', res.token.substring(0, 20) + '...');
+    const token = await window.api.getPlatformToken();
+    if (token) {
+      platformToken = token;
+      console.log('[平台] 初始化获取 token 成功:', token.substring(0, 20) + '...');
     } else {
-      console.warn('[平台] 初始化登录失败:', res?.error || '未知错误');
+      console.warn('[平台] 初始化未获取到 token');
     }
   } catch (err) {
-    console.warn('[平台] 初始化登录异常（应用继续运行）:', err.message);
+    console.warn('[平台] 初始化获取 token 异常（应用继续运行）:', err.message);
   }
 })();
 
