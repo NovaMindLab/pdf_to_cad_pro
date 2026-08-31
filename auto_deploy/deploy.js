@@ -177,6 +177,9 @@ async function main() {
   if (isDryRun) {
     console.log('[部署] --dry-run: 跳过构建与上传');
   } else {
+    // 国内网络必需：GitHub 直连下载 Electron 运行时/winCodeSign 会卡死，默认走 npmmirror 镜像（已设置的不覆盖）
+    process.env.ELECTRON_MIRROR ||= 'https://npmmirror.com/mirrors/electron/';
+    process.env.ELECTRON_BUILDER_BINARIES_MIRROR ||= 'https://npmmirror.com/mirrors/electron-builder-binaries/';
     console.log('[部署] 开始构建: npm run dist (Python 打包 + electron-builder，可能需要几分钟)...');
     execSync('npm run dist', { cwd: ROOT, stdio: 'inherit' });
   }

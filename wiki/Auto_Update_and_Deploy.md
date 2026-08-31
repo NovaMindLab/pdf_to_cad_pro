@@ -72,12 +72,12 @@
 ### 3.3 标准发布命令
 
 ```powershell
-$env:ELECTRON_MIRROR='https://npmmirror.com/mirrors/electron/';
-$env:ELECTRON_BUILDER_BINARIES_MIRROR='https://npmmirror.com/mirrors/electron-builder-binaries/';
 npm run deploy
 ```
 
-两个镜像环境变量是**国内网络必需**的：GitHub 直连下载 Electron 运行时（111MB）和 winCodeSign 会长时间卡死，npmmirror 镜像约 1-2 分钟完成。
+镜像已内置在 `deploy.js` 中（构建前自动设置 `ELECTRON_MIRROR` / `ELECTRON_BUILDER_BINARIES_MIRROR` 为 npmmirror，外部已设置的值不会被覆盖）。
+
+这两个镜像是**国内网络必需**的：GitHub 直连下载 Electron 运行时（111MB）和 winCodeSign 会长时间卡死，npmmirror 镜像约 1-2 分钟完成。
 
 ### 3.4 常用参数
 
