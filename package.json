@@ -1,11 +1,12 @@
 {
   "name": "pdf-to-cad",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "High-precision vector PDF to DXF CAD converter",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build-python": "py -3 -m PyInstaller --onefile --name pdf-converter --workpath converter/build --distpath converter/dist converter/converter.py",
+    "deploy": "node auto_deploy/deploy.js",
+    "build-python": "py -3 -m PyInstaller --onefile --name pdf-converter --workpath converter/build --distpath converter/dist --exclude-module pandas --exclude-module scipy --exclude-module pyarrow --exclude-module matplotlib converter/converter.py",
     "pack": "electron-builder --dir",
     "dist": "npm run build-python && electron-builder",
     "build:win": "electron-builder --win"

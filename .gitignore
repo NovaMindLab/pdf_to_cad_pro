@@ -10,3 +10,7 @@ __pycache__/
 *.pyz
 .vscode/
 .idea/
+release/
+auto_deploy/deploy.config.json
+debug.log
+*.exe

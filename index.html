@@ -18,6 +18,11 @@
       <img src="assets/logo.png" alt="Logo" class="app-logo-icon" width="22" height="22" style="border-radius: 5px; object-fit: cover; box-shadow: 0 0 10px rgba(0, 242, 254, 0.35); flex-shrink: 0;">
       <span>PDF-to-CAD Studio</span>
     </div>
+    <!-- 顶部导航：编辑 / 设置 -->
+    <nav class="titlebar-nav">
+      <button class="nav-tab active" id="nav-tab-editor">编辑</button>
+      <button class="nav-tab" id="nav-tab-settings">设置</button>
+    </nav>
   </div>
 
   <div class="dashboard-container">
@@ -183,6 +188,53 @@
     </main>
   </div>
 
+  <!-- 设置界面 -->
+  <div class="settings-view hidden" id="settings-view">
+    <div class="settings-content">
+      <!-- 升级卡片 -->
+      <div class="settings-card">
+        <div class="settings-card-header">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="16 6 12 2 8 6"/>
+            <line x1="12" y1="2" x2="12" y2="15"/>
+            <path d="M4 22h16"/>
+          </svg>
+          <h3>软件升级</h3>
+        </div>
+        <p class="settings-card-desc">检查并更新到最新版本，获取新功能与优化。</p>
+        <div class="settings-card-body">
+          <span class="settings-version">当前版本 v1.0.0</span>
+          <button class="btn btn-primary btn-small" id="btn-check-update">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px">
+              <polyline points="23 4 23 10 17 10"/>
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+            </svg>
+            检查更新
+          </button>
+        </div>
+        <div class="settings-update-status" id="update-status"></div>
+        <!-- 下载进度条 -->
+        <div class="update-progress-wrap hidden" id="update-progress-wrap">
+          <div class="update-progress-bar">
+            <div class="update-progress-inner" id="update-progress"></div>
+          </div>
+          <span class="update-progress-text" id="update-progress-text">0%</span>
+        </div>
+        <!-- 下载并安装按钮（发现新版本时显示） -->
+        <div style="margin-top: 12px;">
+          <button class="btn btn-primary btn-small hidden" id="btn-download-update">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            下载并安装
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- 属性面板浮层 -->
   <div class="prop-panel hidden" id="prop-panel">
     <div class="prop-panel-header">
@@ -328,13 +380,12 @@
     </div>
   </div>
 
-  <!-- 历史记录弹窗 (Modal) -->
+  <!-- 历史记录弹窗 (Modal) - 数据源: 平台云端文件列表 -->
   <div class="modal-overlay hidden" id="history-modal">
     <div class="modal-container modal-large">
       <div class="modal-header">
-        <h2>历史记录 (SQLite)</h2>
+        <h2>云端文件列表</h2>
         <div style="display:flex; gap:10px; align-items:center;">
-          <button class="btn btn-secondary btn-small" id="btn-clear-history">清空记录</button>
           <button class="modal-close-btn" id="btn-close-history-modal">✕</button>
         </div>
       </div>
@@ -345,13 +396,12 @@
               <tr>
                 <th class="col-expand"></th>
                 <th class="col-filename">文件名</th>
-                <th class="col-status">状态</th>
-                <th class="col-time">时间</th>
-                <th class="col-actions">操作</th>
+                <th class="col-time">大小</th>
+                <th class="col-status">类型</th>
               </tr>
             </thead>
             <tbody id="history-list">
-              <tr><td colspan="5"><div class="empty-history">暂无历史记录</div></td></tr>
+              <tr><td colspan="4"><div class="empty-history">正在加载...</div></td></tr>
             </tbody>
           </table>
         </div>

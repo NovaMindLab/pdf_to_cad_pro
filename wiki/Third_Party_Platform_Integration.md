@@ -217,6 +217,45 @@ const res = await window.api.platformRequest({
 - 判定业务成功用 `res.data.code === 0`；非 0 通常意味着会话过期，应用重启即可自动重新登录（凭据已保存）；
 - 登录会话有效期 48 小时（Cookie `Max-Age=172800`），应用每次启动都会自动重新登录，正常使用无需关心过期。
 
+### 6.1 云端文件列表（历史记录面板，`GET /v1/folder/files`）
+
+> 已接入（2026-08-31）：历史记录弹窗的数据源已由本地 SQLite 切换为本接口。
+
+```
+GET /v1/folder/files?folder_id=4
+```
+
+返回**两层结构**：外层只有原始文件（PDF），转出来的 CAD 挂在 `children` 里。
+
+```json
+{
+  "code": 0,
+  "data": [
+    {
+      "id": 37,
+      "file_name": "图纸.pdf",
+      "file_size": 167389,
+      "file_type": "application/pdf",
+      "source_file_id": null,
+      "child_count": 2,
+      "children": [
+        { "id": 41, "file_name": "图纸.dwg", "file_size": 88123, "source_file_id": 37 },
+        { "id": 42, "file_name": "图纸修改版.dwg", "file_size": 91002, "source_file_id": 37 }
+      ]
+    }
+  ]
+}
+```
+
+字段约定：
+- `source_file_id === null` → 原始文件（PDF）；非 null → CAD 子文件；
+- `child_count` 为 0 时不显示展开箭头；`file_size` 字节准确，可用于下载后核对；
+- 预留：每个 PDF 行可挂「上传编辑后文件」入口，用该行 `id` 作为 `source_file_id` 上传（接口规格待平台提供，暂未实现）。
+
+客户端实现位置：
+- IPC：`main.js` → `platform-list-folder-files`（带 token 请求，`code===0` 时返回 `{ success: true, data: [...] }`）；
+- 渲染：`renderer.js` → `loadHistory()`（两层渲染：PDF 主行 + `children` 缩进明细行，大小自动格式化 B/KB/MB）。
+
 ## 7. 验证脚本
 
 `utils/test_module.js`（验证签名登录模块）、`utils/test_topos.js`（验证登录 + 拓扑列表接口）为 Node 直跑脚本：

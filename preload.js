@@ -52,9 +52,26 @@ contextBridge.exposeInMainWorld('api', {
   getPlatformToken: () =>
     ipcRenderer.invoke('get-platform-token'),
 
+  // 云端文件列表（历史记录面板）
+  platformListFolderFiles: (folderId) =>
+    ipcRenderer.invoke('platform-list-folder-files', folderId),
+
   platformLogin: () =>
     ipcRenderer.invoke('platform-login'),
 
   platformRequest: (params) =>
     ipcRenderer.invoke('platform-request', params),
+
+  // ====== 应用内自动更新 ======
+  checkForUpdate: () =>
+    ipcRenderer.invoke('check-for-update'),
+
+  downloadUpdate: (url, name) =>
+    ipcRenderer.invoke('download-update', url, name),
+
+  installUpdate: (filePath) =>
+    ipcRenderer.invoke('install-update', filePath),
+
+  onUpdateDownloadProgress: (callback) =>
+    ipcRenderer.on('update-download-progress', (event, pct) => callback(pct)),
 });

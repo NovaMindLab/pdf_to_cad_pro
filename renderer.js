@@ -842,166 +842,114 @@ btnErrorReset.addEventListener('click', resetModalUI);
 
 // --- History database loader ---
 const historyList = document.getElementById('history-list');
-const btnClearHistory = document.getElementById('btn-clear-history');
 
+function formatCloudFileSize(n) {
+  if (n == null) return '—';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// 历史记录面板数据源：平台云端文件列表（两层结构：原始 PDF -> children CAD）
 async function loadHistory() {
   if (!historyList) return;
+  historyList.innerHTML = '<tr><td colspan="4"><div class="empty-history">正在加载云端文件列表...</div></td></tr>';
+  let files = [];
   try {
-    const logs = await window.api.getHistory();
-    historyList.innerHTML = '';
-    
-    if (!logs || logs.length === 0) {
-      historyList.innerHTML = '<tr><td colspan="5"><div class="empty-history">暂无历史记录</div></td></tr>';
-      return;
-    }
-    
-    logs.forEach(log => {
-      const timeStr = log.timestamp ? log.timestamp.substring(5, 16) : '未知';
-      const pdfName = log.pdf_path ? log.pdf_path.split(/[\\/]/).pop() : '未知';
-      const hasSubgraphs = log.subgraphs && log.subgraphs.length > 0;
-      
-      const tr = document.createElement('tr');
-      tr.dataset.id = log.id;
-      
-      // --- 展开箭头 ---
-      const expandTd = document.createElement('td');
-      if (hasSubgraphs) {
-        const expandBtn = document.createElement('button');
-        expandBtn.className = 'expand-btn';
-        expandBtn.innerHTML = '▶';
-        expandBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const subRow = tr.nextElementSibling;
-          if (subRow && subRow.classList.contains('subgraphs-row')) {
-            subRow.style.display = subRow.style.display === 'none' ? '' : 'none';
-            expandBtn.classList.toggle('expanded');
-          }
-        });
-        expandTd.appendChild(expandBtn);
-      }
-      tr.appendChild(expandTd);
-      
-      // --- 文件名 ---
-      const nameTd = document.createElement('td');
-      nameTd.className = 'td-filename';
-      nameTd.textContent = pdfName;
-      nameTd.title = log.pdf_path;
-      tr.appendChild(nameTd);
-      
-      // --- 状态 ---
-      const statusTd = document.createElement('td');
-      statusTd.className = 'td-status';
-      if (log.status === 'success') {
-        statusTd.innerHTML = '<span class="dot-badge dot-badge-success">已转换</span>';
-      } else {
-        statusTd.innerHTML = '<span class="dot-badge dot-badge-error">失败</span>';
-      }
-      tr.appendChild(statusTd);
-      
-      // --- 时间 ---
-      const timeTd = document.createElement('td');
-      timeTd.className = 'td-time';
-      timeTd.textContent = timeStr;
-      tr.appendChild(timeTd);
-      
-      // --- 操作 ---
-      const actionsTd = document.createElement('td');
-      actionsTd.className = 'td-actions';
-      if (log.status === 'success') {
-        actionsTd.innerHTML = `
-          <button class="action-btn btn-open" title="打开文件" data-path="${log.dxf_path}">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>
-          </button>
-          <button class="action-btn btn-locate" title="定位文件" data-path="${log.dxf_path}">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-          </button>
-        `;
-      }
-      actionsTd.innerHTML += `
-        <button class="action-btn btn-delete" title="删除记录" data-id="${log.id}">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-        </button>
-      `;
-      tr.appendChild(actionsTd);
-      
-      // --- 主行点击：载入图纸 ---
-      tr.addEventListener('click', (e) => {
-        if (e.target.closest('.action-btn')) return;
-        document.querySelectorAll('#history-list tr.active').forEach(r => r.classList.remove('active'));
-        tr.classList.add('active');
-        
-        if (log.status === 'success') {
-          const baseName = log.dxf_path.replace(/\.dxf$/i, '');
-          const pageMeta = {
-            path: `${baseName}_page_0.png`,
-            width: 612,
-            height: 792
-          };
-          currentPdfHash = log.pdf_hash || log.pdf_path || '';
-          if (placeholderView) placeholderView.classList.add('hidden');
-          if (comparisonContainer) comparisonContainer.classList.remove('hidden');
-          loadAndRenderComparison(pageMeta, log.dxf_path);
-          historyModal.classList.add('hidden');
-        } else {
-          customAlert('该文件转换失败，无法载入预览。');
-        }
-      });
-      
-      historyList.appendChild(tr);
-      
-      // --- 子图明细行 ---
-      if (hasSubgraphs) {
-        const subRow = document.createElement('tr');
-        subRow.className = 'subgraphs-row';
-        subRow.style.display = 'none';
-        const subTd = document.createElement('td');
-        subTd.colSpan = 5;
-        
-        const inner = document.createElement('div');
-        inner.className = 'subgraphs-inner';
-        
-        log.subgraphs.forEach(sub => {
-          const subTimeStr = sub.timestamp ? sub.timestamp.substring(5, 16) : '';
-          const item = document.createElement('div');
-          item.className = 'subgraph-item';
-          item.innerHTML = `
-            <span class="subgraph-name">${sub.name || '未命名图元'}</span>
-            <span class="subgraph-time">${subTimeStr}</span>
-          `;
-          item.addEventListener('click', (e) => {
-            e.stopPropagation();
-            document.querySelectorAll('.subgraph-item').forEach(s => s.classList.remove('active'));
-            document.querySelectorAll('#history-list tr.active').forEach(r => r.classList.remove('active'));
-            item.classList.add('active');
-            tr.classList.add('active');
-            
-            if (log.status === 'success') {
-              const baseName = log.dxf_path.replace(/\.dxf$/i, '');
-              const pageMeta = {
-                path: `${baseName}_page_0.png`,
-                width: 612,
-                height: 792
-              };
-              currentPdfHash = log.pdf_hash || log.pdf_path || '';
-              if (placeholderView) placeholderView.classList.add('hidden');
-              if (comparisonContainer) comparisonContainer.classList.remove('hidden');
-              loadAndRenderComparison(pageMeta, sub.dxf_path);
-              historyModal.classList.add('hidden');
-            } else {
-              customAlert('原文件转换失败，无法载入子图预览。');
-            }
-          });
-          inner.appendChild(item);
-        });
-        
-        subTd.appendChild(inner);
-        subRow.appendChild(subTd);
-        historyList.appendChild(subRow);
-      }
-    });
+    const res = await window.api.platformListFolderFiles();
+    if (!res.success) throw new Error(res.error || '接口调用失败');
+    files = res.data || [];
   } catch (error) {
-    console.error('Failed to load conversion history:', error);
+    historyList.innerHTML = `<tr><td colspan="4"><div class="empty-history" style="color:#ef4444;">加载失败：${error.message}</div></td></tr>`;
+    return;
   }
+
+  historyList.innerHTML = '';
+  if (!files.length) {
+    historyList.innerHTML = '<tr><td colspan="4"><div class="empty-history">云端暂无文件</div></td></tr>';
+    return;
+  }
+
+  files.forEach(file => {
+    const isSource = file.source_file_id === null || file.source_file_id === undefined;
+    const hasChildren = isSource && (file.child_count || 0) > 0 && Array.isArray(file.children) && file.children.length > 0;
+    let toggleChildren = null;
+
+    const tr = document.createElement('tr');
+    tr.dataset.id = file.id;
+
+    // --- 展开箭头 ---
+    const expandTd = document.createElement('td');
+    if (hasChildren) {
+      const expandBtn = document.createElement('button');
+      expandBtn.className = 'expand-btn';
+      expandBtn.innerHTML = '▶';
+      expandBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (toggleChildren) toggleChildren();
+      });
+      expandTd.appendChild(expandBtn);
+    }
+    tr.appendChild(expandTd);
+
+    // --- 文件名 ---
+    const nameTd = document.createElement('td');
+    nameTd.className = 'td-filename';
+    nameTd.textContent = file.file_name;
+    tr.appendChild(nameTd);
+
+    // --- 大小 ---
+    const sizeTd = document.createElement('td');
+    sizeTd.className = 'td-time';
+    sizeTd.textContent = formatCloudFileSize(file.file_size);
+    tr.appendChild(sizeTd);
+
+    // --- 类型 ---
+    const typeTd = document.createElement('td');
+    typeTd.className = 'td-status';
+    typeTd.textContent = isSource ? '原始 PDF' : 'CAD';
+    tr.appendChild(typeTd);
+
+    // --- 主行点击：展开/收起 CAD 子文件 ---
+    if (hasChildren) {
+      tr.addEventListener('click', () => {
+        if (toggleChildren) toggleChildren();
+      });
+    }
+
+    historyList.appendChild(tr);
+
+    // --- CAD 子文件明细行 ---
+    if (hasChildren) {
+      const childRow = document.createElement('tr');
+      childRow.className = 'cloud-children-row';
+      childRow.style.display = 'none';
+      const childTd = document.createElement('td');
+      childTd.colSpan = 4;
+
+      const inner = document.createElement('div');
+      inner.className = 'subgraphs-inner';
+
+      file.children.forEach(child => {
+        const item = document.createElement('div');
+        item.className = 'subgraph-item';
+        item.innerHTML = `
+          <span class="subgraph-name">${child.file_name}</span>
+          <span class="subgraph-time">${formatCloudFileSize(child.file_size)}</span>
+        `;
+        inner.appendChild(item);
+      });
+
+      childTd.appendChild(inner);
+      childRow.appendChild(childTd);
+      historyList.appendChild(childRow);
+
+      toggleChildren = () => {
+        childRow.style.display = childRow.style.display === 'none' ? '' : 'none';
+        expandBtn.classList.toggle('expanded');
+      };
+    }
+  });
 }
 
 async function loadSubgraphs() {
@@ -1076,55 +1024,6 @@ async function loadSubgraphs() {
   } catch (err) {
     subgraphsList.innerHTML = `<div class="empty-history" style="color:#ef4444;">加载失败: ${err.message}</div>`;
   }
-}
-
-// Bind action buttons using event delegation on historyList
-if (historyList) {
-  historyList.addEventListener('click', async (e) => {
-    const btnOpen = e.target.closest('.btn-open');
-    const btnLocate = e.target.closest('.btn-locate');
-    const btnDelete = e.target.closest('.btn-delete');
-    
-    if (btnDelete) {
-      e.stopPropagation();
-      const id = btnDelete.dataset.id;
-      if (await customConfirm("确定要删除这条记录吗？")) {
-        const res = await window.api.deleteHistoryItem(id);
-        if (res && res.status === 'success') {
-          loadHistory();
-        } else {
-          customAlert("删除记录失败: " + (res ? res.message : "未知错误"));
-        }
-      }
-      return;
-    }
-    
-    if (btnOpen) {
-      const filePath = btnOpen.dataset.path;
-      const ok = await window.api.openFile(filePath);
-      if (!ok) {
-        customAlert("打开文件失败。请确保您的系统上已安装默认 CAD 查看软件。");
-      }
-    }
-    
-    if (btnLocate) {
-      const filePath = btnLocate.dataset.path;
-      window.api.openExplorer(filePath);
-    }
-  });
-}
-
-if (btnClearHistory) {
-  btnClearHistory.addEventListener('click', async () => {
-    if (await customConfirm("您确定要清空 SQLite 数据库中的所有转换历史记录吗？")) {
-      const res = await window.api.clearHistory();
-      if (res && res.status === 'success') {
-        loadHistory();
-      } else {
-        customAlert("清空数据库日志失败: " + (res ? res.message : "未知错误"));
-      }
-    }
-  });
 }
 
 // Initial history load on startup
@@ -4626,3 +4525,87 @@ if (btnPlatformTest) {
     btnPlatformTest.disabled = false;
   });
 }
+
+// ====== 顶部导航切换（编辑 / 设置） ======
+const navTabEditor = document.getElementById('nav-tab-editor');
+const navTabSettings = document.getElementById('nav-tab-settings');
+const dashboardContainer = document.querySelector('.dashboard-container');
+const settingsView = document.getElementById('settings-view');
+const btnCheckUpdate = document.getElementById('btn-check-update');
+const updateStatus = document.getElementById('update-status');
+const btnDownloadUpdate = document.getElementById('btn-download-update');
+const updateProgressWrap = document.getElementById('update-progress-wrap');
+const updateProgressBar = document.getElementById('update-progress');
+const updateProgressText = document.getElementById('update-progress-text');
+
+function switchNavView(view) {
+  const isSettings = view === 'settings';
+  navTabEditor.classList.toggle('active', !isSettings);
+  navTabSettings.classList.toggle('active', isSettings);
+  dashboardContainer.classList.toggle('hidden', isSettings);
+  settingsView.classList.toggle('hidden', !isSettings);
+}
+
+navTabEditor.addEventListener('click', () => switchNavView('editor'));
+navTabSettings.addEventListener('click', () => switchNavView('settings'));
+
+// ====== 检查更新（Gitee Release） ======
+let latestUpdate = null;
+
+// 下载进度回报
+if (window.api.onUpdateDownloadProgress) {
+  window.api.onUpdateDownloadProgress((pct) => {
+    updateProgressBar.style.width = `${pct}%`;
+    updateProgressText.textContent = `${pct}%`;
+  });
+}
+
+btnCheckUpdate.addEventListener('click', async () => {
+  updateStatus.textContent = '正在检查更新...';
+  btnDownloadUpdate.classList.add('hidden');
+  const res = await window.api.checkForUpdate();
+  if (!res.success) {
+    updateStatus.textContent = `检查更新失败：${res.error}`;
+    return;
+  }
+  if (!res.hasUpdate) {
+    updateStatus.textContent = `当前已是最新版本（v${res.currentVersion}）`;
+    return;
+  }
+  latestUpdate = res;
+  const hasFiles = res.parts && res.parts.length > 0;
+  updateStatus.textContent = `发现新版本 ${res.latestVersion}（当前 v${res.currentVersion}）${hasFiles ? '' : '，但该版本未上传安装包，请前往发布页手动下载'}`;
+  if (hasFiles) {
+    btnDownloadUpdate.classList.remove('hidden');
+  }
+});
+
+btnDownloadUpdate.addEventListener('click', async () => {
+  if (!latestUpdate || !latestUpdate.parts || latestUpdate.parts.length === 0) return;
+  btnDownloadUpdate.disabled = true;
+  btnDownloadUpdate.querySelector('span')?.remove();
+  btnDownloadUpdate.style.opacity = '0.7';
+  updateStatus.textContent = '正在下载更新...';
+  updateProgressWrap.classList.remove('hidden');
+  updateProgressBar.style.width = '0%';
+  updateProgressText.textContent = '0%';
+
+  const dl = await window.api.downloadUpdate(latestUpdate.parts, latestUpdate.totalSize);
+  if (!dl.success) {
+    updateStatus.textContent = `下载失败：${dl.error}`;
+    updateProgressWrap.classList.add('hidden');
+    btnDownloadUpdate.disabled = false;
+    btnDownloadUpdate.style.opacity = '';
+    return;
+  }
+
+  updateProgressBar.style.width = '100%';
+  updateProgressText.textContent = '100%';
+  updateStatus.textContent = '下载完成，正在启动安装程序...';
+  const inst = await window.api.installUpdate(dl.path);
+  if (!inst.success) {
+    updateStatus.textContent = `启动安装失败：${inst.error}`;
+    btnDownloadUpdate.disabled = false;
+    btnDownloadUpdate.style.opacity = '';
+  }
+});

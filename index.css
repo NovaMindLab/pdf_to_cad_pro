@@ -71,6 +71,137 @@ body {
   animation: logo-glow 3s ease-in-out infinite alternate;
 }
 
+/* 顶部导航 Tab */
+.titlebar-nav {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  -webkit-app-region: no-drag;
+  height: 100%;
+}
+
+.nav-tab {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 5px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.2s, background 0.2s;
+  height: 26px;
+  line-height: 16px;
+}
+
+.nav-tab:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.nav-tab.active {
+  color: var(--text-main);
+  background: rgba(0, 242, 254, 0.12);
+  text-shadow: 0 0 12px rgba(0, 242, 254, 0.4);
+}
+
+/* 设置界面 */
+.settings-view {
+  height: calc(100vh - 38px);
+  overflow-y: auto;
+  background: var(--bg-primary);
+}
+
+.settings-content {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 32px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settings-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 20px 24px;
+}
+
+.settings-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--accent-cyan);
+}
+
+.settings-card-header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.settings-card-desc {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.settings-card-body {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.settings-version {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.settings-update-status {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--accent-cyan);
+  min-height: 16px;
+}
+
+/* 升级下载进度条 */
+.update-progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.update-progress-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.update-progress-inner {
+  height: 100%;
+  width: 0%;
+  border-radius: 3px;
+  background: var(--accent-gradient);
+  transition: width 0.2s ease;
+}
+
+.update-progress-text {
+  font-size: 12px;
+  color: var(--text-muted);
+  min-width: 36px;
+  text-align: right;
+}
+
 @keyframes logo-glow {
   0% { filter: drop-shadow(0 0 1px rgba(0, 242, 254, 0.2)); }
   100% { filter: drop-shadow(0 0 5px rgba(0, 242, 254, 0.6)); }
@@ -970,6 +1101,21 @@ body {
   padding: 6px 0 6px 0;
   background: transparent;
   border-radius: 0;
+}
+
+/* 云端文件列表：CAD 子文件明细行 */
+.history-table .cloud-children-row {
+  background: transparent;
+}
+
+.history-table .cloud-children-row td {
+  padding: 6px 0 6px 0;
+  background: transparent;
+  border-radius: 0;
+}
+
+.history-table .cloud-children-row .subgraph-item {
+  padding-left: 36px;
 }
 
 .history-table .subgraphs-inner {

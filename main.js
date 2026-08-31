@@ -1,6 +1,8 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { pipeline } = require('stream/promises');
+const { Readable } = require('stream');
 const child_process = require('child_process');
 const { login: platformLogin, loginWithPassword, httpRequest } = require('./utils/login');
 
@@ -662,6 +664,24 @@ ipcMain.handle('get-platform-token', async () => {
   return platformToken;
 });
 
+// 云端文件列表（历史记录面板数据源，两层结构：原始 PDF -> children CAD）
+ipcMain.handle('platform-list-folder-files', async (event, folderId) => {
+  try {
+    if (!platformToken) return { success: false, error: '未登录平台' };
+    const res = await httpRequest({
+      url: `/folder/files?folder_id=${folderId || 4}`,
+      method: 'GET',
+      token: platformToken,
+    });
+    if (res && res.code === 0) {
+      return { success: true, data: res.data || [] };
+    }
+    return { success: false, error: (res && (res.message || res.msg)) || '接口返回异常' };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 // 平台登录
 ipcMain.handle('platform-login', async () => {
   return platformLogin();
@@ -672,6 +692,134 @@ ipcMain.handle('platform-request', async (event, { url, method, data, token }) =
   try {
     const result = await httpRequest({ url, method, data, token });
     return { success: true, data: result };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// ====== 应用内自动更新（Gitee Release） ======
+// 升级仓库为公开仓库，读取 Release 无需鉴权，请勿将私有 token 打包进客户端
+const UPDATE_RELEASE_API = 'https://gitee.com/api/v5/repos/hqxluoyang/pdf_to_cad_pro_update/releases/latest';
+
+// 解析 "v1.2.3" / "1.2.3-rc" 之类的 tag 为 [major, minor, patch]
+function parseVersion(v) {
+  const m = String(v || '').trim().replace(/^v/i, '').match(/\d+(?:\.\d+)*/);
+  if (!m) return null;
+  return m[0].split('.').map((n) => parseInt(n, 10));
+}
+
+function isNewerVersion(remote, local) {
+  const r = parseVersion(remote);
+  const l = parseVersion(local);
+  if (!r) return false;
+  if (!l) return true;
+  for (let i = 0; i < 3; i++) {
+    const a = r[i] || 0;
+    const b = l[i] || 0;
+    if (a !== b) return a > b;
+  }
+  return false;
+}
+
+// 检查更新：获取最新 Release 并与当前版本比较
+ipcMain.handle('check-for-update', async () => {
+  try {
+    const res = await fetch(UPDATE_RELEASE_API);
+    if (!res.ok) return { success: false, error: `HTTP ${res.status}` };
+    const rel = await res.json();
+    const currentVersion = app.getVersion();
+    const latestVersion = rel.tag_name || rel.name || '';
+    const assets = rel.assets || [];
+    // 分卷文件（>100MB 自动切分的 .gpartNN）优先，否则找单个 .exe
+    const partAssets = assets
+      .filter((a) => /\.gpart\d+$/i.test(a.name))
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    const exeAsset = assets.find((a) => /\.exe$/i.test(a.name) && !/\.gpart\d+$/i.test(a.name));
+    const parts = partAssets.length
+      ? partAssets.map((a) => ({ name: a.name, url: a.browser_download_url, size: a.size }))
+      : exeAsset
+        ? [{ name: exeAsset.name, url: exeAsset.browser_download_url, size: exeAsset.size }]
+        : [];
+    // releases/latest 接口不带 size 字段，用 HEAD 请求补全（进度条需要）
+    for (const p of parts) {
+      if (!p.size) {
+        try {
+          const h = await fetch(p.url, { method: 'HEAD' });
+          p.size = Number(h.headers.get('content-length')) || 0;
+        } catch {
+          p.size = 0;
+        }
+      }
+    }
+    return {
+      success: true,
+      hasUpdate: isNewerVersion(latestVersion, currentVersion),
+      currentVersion,
+      latestVersion,
+      notes: rel.body || '',
+      parts,
+      totalSize: parts.reduce((s, p) => s + (p.size || 0), 0),
+      releaseUrl: rel.html_url || 'https://gitee.com/hqxluoyang/pdf_to_cad_pro_update/releases'
+    };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// 下载更新（支持分卷，自动合并），通过 update-download-progress 事件回报进度（0-100）
+ipcMain.handle('download-update', async (event, parts, totalSize) => {
+  try {
+    if (!Array.isArray(parts) || parts.length === 0) {
+      return { success: false, error: '没有可下载的更新文件' };
+    }
+    const tmpDir = app.getPath('temp');
+    let downloaded = 0;
+    const partPaths = [];
+
+    for (const part of parts) {
+      const res = await fetch(part.url);
+      if (!res.ok || !res.body) return { success: false, error: `HTTP ${res.status}` };
+      const dest = path.join(tmpDir, part.name);
+      const nodeStream = Readable.fromWeb(res.body);
+      nodeStream.on('data', (chunk) => {
+        downloaded += chunk.length;
+        const pct = totalSize ? Math.min(99, Math.round((downloaded / totalSize) * 100)) : 0;
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('update-download-progress', pct);
+        }
+      });
+      await pipeline(nodeStream, fs.createWriteStream(dest));
+      partPaths.push(dest);
+    }
+
+    // 合并分卷为完整安装包
+    const finalName = parts[0].name.replace(/\.gpart\d+$/i, '');
+    const finalPath = path.join(tmpDir, finalName);
+    const out = fs.openSync(finalPath, 'w');
+    for (const p of partPaths) {
+      fs.writeSync(out, fs.readFileSync(p));
+      fs.unlinkSync(p);
+    }
+    fs.closeSync(out);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-download-progress', 100);
+    }
+    return { success: true, path: finalPath };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// 启动安装程序并退出当前应用
+ipcMain.handle('install-update', async (event, filePath) => {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) {
+      return { success: false, error: '安装包不存在' };
+    }
+    const err = await shell.openPath(filePath);
+    if (err) return { success: false, error: err };
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+    return { success: true };
   } catch (err) {
     return { success: false, error: err.message };
   }
