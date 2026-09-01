@@ -147,9 +147,22 @@ body {
 }
 
 .settings-card-desc {
+
   margin: 8px 0 0;
   font-size: 12px;
   color: var(--text-muted);
+}
+
+/* 退出登录（危险操作按钮） */
+.btn-danger {
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+  color: #fff;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.btn-danger:hover {
+  background: linear-gradient(135deg, #f05252, #e03131);
+  box-shadow: 0 4px 14px rgba(239, 68, 68, 0.3);
 }
 
 .settings-card-body {
@@ -1118,6 +1131,60 @@ body {
   padding-left: 36px;
 }
 
+/* 云端 PDF 行「导入」按钮 */
+.history-table .btn-import-cloud {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: #06222b;
+  background: linear-gradient(135deg, #22d3ee, #0ea5b7);
+  border: none;
+  border-radius: 20px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.25);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+}
+
+.history-table .btn-import-cloud svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+}
+
+.history-table .btn-import-cloud:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.12);
+  box-shadow: 0 4px 14px rgba(34, 211, 238, 0.4);
+}
+
+.history-table .btn-import-cloud:active:not(:disabled) {
+  transform: translateY(0);
+  filter: brightness(0.95);
+  box-shadow: 0 1px 4px rgba(34, 211, 238, 0.3);
+}
+
+/* 已缓存状态：绿色系，表示直接打开本地文件 */
+.history-table .btn-import-cloud.is-cached {
+  color: #052e16;
+  background: linear-gradient(135deg, #34d399, #10b981);
+  box-shadow: 0 2px 8px rgba(52, 211, 153, 0.25);
+}
+
+.history-table .btn-import-cloud.is-cached:hover:not(:disabled) {
+  box-shadow: 0 4px 14px rgba(52, 211, 153, 0.4);
+}
+
+.history-table .btn-import-cloud:disabled {
+  opacity: 0.55;
+  cursor: wait;
+  transform: none;
+  filter: none;
+}
+
 .history-table .subgraphs-inner {
   padding: 10px 16px 10px 44px;
   display: flex;
@@ -1437,6 +1504,37 @@ body {
   width: 100%;
   position: relative;
   overflow: hidden;
+}
+
+/* CAD 加载遮罩 */
+.cad-loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(5, 8, 20, 0.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  animation: fadeIn 0.2s ease;
+}
+
+.cad-loading-overlay h4 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.cad-loading-overlay p {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.cad-loading-overlay.hidden {
+  display: none;
 }
 
 .drag-drop-zone {

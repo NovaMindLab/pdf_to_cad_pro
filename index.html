@@ -33,8 +33,8 @@
       <!-- 顶部操作控制栏 -->
       <div class="preview-control-bar">
         <div class="control-group-left">
-          <!-- 新增：弹窗触发按钮 -->
-          <button class="btn btn-primary btn-small" id="btn-open-import">
+          <!-- 新增：弹窗触发按钮（本地导入入口已隐藏，统一走图纸列表） -->
+          <button class="btn btn-primary btn-small hidden" id="btn-open-import">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;">
               <path d="M12 5v14M5 12h14"/>
             </svg>
@@ -45,9 +45,9 @@
               <circle cx="12" cy="12" r="10"></circle>
               <polyline points="12 6 12 12 16 14"></polyline>
             </svg>
-            历史记录
+            图纸列表
           </button>
-          <button class="btn btn-secondary btn-small" id="btn-open-subgraphs" style="margin-left: 8px;">
+          <button class="btn btn-secondary btn-small hidden" id="btn-open-subgraphs">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;">
               <path d="M4 22h14a2 2 0 0 0 2-2V7.5L14.5 2H6a2 2 0 0 0-2 2v4"></path>
               <polyline points="14 2 14 8 20 8"></polyline>
@@ -106,6 +106,16 @@
 
       <!-- 画布大容器区域 -->
       <div class="preview-canvas-area">
+        <!-- CAD 加载遮罩 -->
+        <div class="cad-loading-overlay hidden" id="cad-loading-overlay">
+          <div class="spinner-container">
+            <div class="spinner"></div>
+            <div class="spinner-glow"></div>
+          </div>
+          <h4>正在加载 CAD 图纸...</h4>
+          <p>大图纸解析与渲染可能需要数秒，请稍候</p>
+        </div>
+
         <!-- 欢迎/拖拽占位面板 -->
         <div class="preview-placeholder" id="preview-placeholder">
           <div class="drag-drop-zone">
@@ -203,7 +213,7 @@
         </div>
         <p class="settings-card-desc">检查并更新到最新版本，获取新功能与优化。</p>
         <div class="settings-card-body">
-          <span class="settings-version">当前版本 v1.0.0</span>
+          <span class="settings-version">当前版本 v1.0.2</span>
           <button class="btn btn-primary btn-small" id="btn-check-update">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px">
               <polyline points="23 4 23 10 17 10"/>
@@ -230,6 +240,21 @@
             </svg>
             下载并安装
           </button>
+        </div>
+      </div>
+
+      <!-- 账号卡片 -->
+      <div class="settings-card">
+        <div class="settings-card-header">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+            <circle cx="12" cy="7" r="4"/>
+          </svg>
+          <h3>账号</h3>
+        </div>
+        <p class="settings-card-desc">当前登录用户：<span id="settings-username" style="color: var(--accent);">加载中...</span></p>
+        <div class="settings-card-body">
+          <button class="btn btn-danger btn-small" id="btn-logout">退出登录</button>
         </div>
       </div>
     </div>
@@ -358,6 +383,14 @@
             <p>已写入数据库，即将自动关闭并渲染图纸...</p>
             <div class="action-row" style="margin-top: 15px;">
               <button class="btn btn-secondary btn-small" id="btn-open-explorer">打开文件夹</button>
+              <button class="btn btn-primary btn-small hidden" id="btn-save-cloud">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px">
+                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                  <polyline points="17 21 17 13 7 13 7 21"/>
+                  <polyline points="7 3 7 8 15 8"/>
+                </svg>
+                <span>保存</span>
+              </button>
             </div>
           </div>
 
@@ -384,7 +417,7 @@
   <div class="modal-overlay hidden" id="history-modal">
     <div class="modal-container modal-large">
       <div class="modal-header">
-        <h2>云端文件列表</h2>
+        <h2>图纸列表</h2>
         <div style="display:flex; gap:10px; align-items:center;">
           <button class="modal-close-btn" id="btn-close-history-modal">✕</button>
         </div>
@@ -398,10 +431,11 @@
                 <th class="col-filename">文件名</th>
                 <th class="col-time">大小</th>
                 <th class="col-status">类型</th>
+                <th class="col-actions">操作</th>
               </tr>
             </thead>
             <tbody id="history-list">
-              <tr><td colspan="4"><div class="empty-history">正在加载...</div></td></tr>
+              <tr><td colspan="5"><div class="empty-history">正在加载...</div></td></tr>
             </tbody>
           </table>
         </div>

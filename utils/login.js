@@ -105,4 +105,4 @@ async function login() {
   }
 }
 
-module.exports = { login, loginWithPassword, httpRequest };
+module.exports = { login, loginWithPassword, httpRequest, PLATFORM_BASE };

@@ -4,7 +4,7 @@ const fs = require('fs');
 const { pipeline } = require('stream/promises');
 const { Readable } = require('stream');
 const child_process = require('child_process');
-const { login: platformLogin, loginWithPassword, httpRequest } = require('./utils/login');
+const { login: platformLogin, loginWithPassword, httpRequest, PLATFORM_BASE } = require('./utils/login');
 
 let mainWindow;
 let loginWindow;
@@ -40,6 +40,11 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
   });
+
+  // 开发调试模式：自动打开 DevTools
+  if (!app.isPackaged) {
+    mainWindow.webContents.openDevTools({ mode: 'detach' });
+  }
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -664,6 +669,23 @@ ipcMain.handle('get-platform-token', async () => {
   return platformToken;
 });
 
+// 获取当前登录用户名（来自本地保存的凭据）
+ipcMain.handle('get-login-user', async () => {
+  const saved = loadAuthCredentials();
+  return saved ? saved.username : '';
+});
+
+// 退出登录：清除本地凭据与 token，回到登录界面
+ipcMain.handle('platform-logout', async () => {
+  const saved = loadAuthCredentials();
+  const username = saved ? saved.username : '';
+  clearAuthCredentials();
+  platformToken = null;
+  createLoginWindow(username);
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+  return { success: true };
+});
+
 // 云端文件列表（历史记录面板数据源，两层结构：原始 PDF -> children CAD）
 ipcMain.handle('platform-list-folder-files', async (event, folderId) => {
   try {
@@ -674,9 +696,194 @@ ipcMain.handle('platform-list-folder-files', async (event, folderId) => {
       token: platformToken,
     });
     if (res && res.code === 0) {
-      return { success: true, data: res.data || [] };
+      const saved = loadAuthCredentials();
+      return { success: true, data: res.data || [], user: saved ? saved.username : '' };
     }
     return { success: false, error: (res && (res.message || res.msg)) || '接口返回异常' };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// 云端下载缓存注册表（fileId -> 本地路径），记录已下载过的平台文件
+function getPdfDir() {
+  return app.isPackaged
+    ? path.join(app.getPath('userData'), 'pdf')
+    : path.join(__dirname, 'pdf');
+}
+
+function getCloudDownloadsFile() {
+  return path.join(getPdfDir(), 'cloud_downloads.json');
+}
+
+function loadCloudDownloads() {
+  try {
+    return JSON.parse(fs.readFileSync(getCloudDownloadsFile(), 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveCloudDownloads(map) {
+  const dir = getPdfDir();
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(getCloudDownloadsFile(), JSON.stringify(map, null, 2), 'utf-8');
+}
+
+// 查询云端下载缓存（渲染进程渲染列表时标记已下载文件）
+ipcMain.handle('get-cloud-downloads', async () => {
+  const map = loadCloudDownloads();
+  // 过滤掉本地文件已被手动删除的记录
+  const valid = {};
+  let changed = false;
+  for (const [id, entry] of Object.entries(map)) {
+    if (entry.path && fs.existsSync(entry.path)) {
+      valid[id] = entry;
+    } else {
+      changed = true;
+    }
+  }
+  if (changed) saveCloudDownloads(valid);
+  return valid;
+});
+
+// CAD 转换结果缓存注册表（云端 PDF id -> 本地转换出的 DXF 列表）
+function getCadCacheFile() {
+  return path.join(getPdfDir(), 'cad_cache.json');
+}
+
+function loadCadCache() {
+  try {
+    return JSON.parse(fs.readFileSync(getCadCacheFile(), 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveCadCache(map) {
+  const dir = getPdfDir();
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(getCadCacheFile(), JSON.stringify(map, null, 2), 'utf-8');
+}
+
+// 记录转换出的 CAD（转换成功后调用）
+ipcMain.handle('record-cad-cache', async (event, { keyId, dxfPath, name }) => {
+  try {
+    if (!keyId || !dxfPath || !fs.existsSync(dxfPath)) return { success: false };
+    const map = loadCadCache();
+    const key = String(keyId);
+    if (!map[key]) map[key] = [];
+    // 去重：同一路径只记一次，更新时间
+    const exist = map[key].find((e) => e.path === dxfPath);
+    if (exist) {
+      exist.savedAt = new Date().toISOString();
+    } else {
+      map[key].push({
+        path: dxfPath,
+        name: name || path.basename(dxfPath),
+        size: fs.statSync(dxfPath).size,
+        savedAt: new Date().toISOString(),
+      });
+    }
+    saveCadCache(map);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// 查询 CAD 缓存（列表展开时显示已转换的 CAD）
+ipcMain.handle('get-cad-cache', async () => {
+  const map = loadCadCache();
+  const valid = {};
+  let changed = false;
+  for (const [id, entries] of Object.entries(map)) {
+    const ok = entries.filter((e) => e.path && fs.existsSync(e.path));
+    if (ok.length > 0) valid[id] = ok;
+    if (ok.length !== entries.length) changed = true;
+  }
+  if (changed) saveCadCache(valid);
+  return valid;
+});
+
+// 用系统默认程序打开文件（列表展开后打开缓存的 CAD）
+ipcMain.handle('open-path-externally', async (event, filePath) => {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return { success: false, error: '文件不存在' };
+    const err = await shell.openPath(filePath);
+    return err ? { success: false, error: err } : { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// 从平台下载文件到本地 pdf 目录（数据PDF列表 -> 导入 -> 转换）；已下载过直接用缓存
+ipcMain.handle('platform-download-file', async (event, { fileId, fileName }) => {
+  try {
+    if (!platformToken) return { success: false, error: '未登录平台' };
+
+    // 命中缓存：本地文件存在则直接复用，不再下载
+    const cacheMap = loadCloudDownloads();
+    const cached = cacheMap[String(fileId)];
+    if (cached && cached.path && fs.existsSync(cached.path)) {
+      console.log(`[平台] 命中本地缓存: ${cached.path}`);
+      return { success: true, path: cached.path, cached: true };
+    }
+
+    const res = await fetch(`${PLATFORM_BASE}/folder/file/download?id=${fileId}`, {
+      headers: { Cookie: `xr3d_token=${platformToken}`, Authorization: `Bearer ${platformToken}` },
+    });
+    const ct = res.headers.get('content-type') || '';
+    if (!res.ok || ct.includes('application/json')) {
+      const body = await res.json().catch(() => null);
+      const msg = (body && (body.message || body.msg)) || `HTTP ${res.status}`;
+      return { success: false, error: msg === 'file_no_existed' ? '文件在平台上不存在' : msg };
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    const pdfDir = getPdfDir();
+    if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+    const safeName = (fileName || `remote_${fileId}.pdf`).replace(/[\\/:*?"<>|]/g, '_');
+    const dest = path.join(pdfDir, safeName);
+    fs.writeFileSync(dest, buf);
+
+    // 记录到下载缓存
+    cacheMap[String(fileId)] = {
+      path: dest,
+      name: fileName || safeName,
+      size: buf.length,
+      downloadedAt: new Date().toISOString(),
+    };
+    saveCloudDownloads(cacheMap);
+
+    console.log(`[平台] 文件下载成功: ${dest} (${(buf.length / 1024).toFixed(1)} KB)`);
+    return { success: true, path: dest, cached: false };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// 上传转换后的 CAD 并关联到原始 PDF（转换成功面板「保存」按钮）
+ipcMain.handle('platform-upload-file', async (event, { filePath, sourceFileId, folderId }) => {
+  try {
+    if (!platformToken) return { success: false, error: '未登录平台' };
+    if (!filePath || !fs.existsSync(filePath)) return { success: false, error: 'DXF 文件不存在' };
+
+    const form = new FormData();
+    form.append('file', new Blob([fs.readFileSync(filePath)]), path.basename(filePath));
+    form.append('folder_id', String(folderId || 4));
+    form.append('source_file_id', String(sourceFileId));
+
+    const res = await fetch(`${PLATFORM_BASE}/folder/file/upload`, {
+      method: 'POST',
+      headers: { Cookie: `xr3d_token=${platformToken}`, Authorization: `Bearer ${platformToken}` },
+      body: form,
+    });
+    const body = await res.json().catch(() => null);
+    if (res.ok && body && body.code === 0) {
+      console.log(`[平台] CAD 上传成功并已关联 source_file_id=${sourceFileId}`);
+      return { success: true, data: body.data };
+    }
+    return { success: false, error: (body && (body.message || body.msg)) || `HTTP ${res.status}` };
   } catch (err) {
     return { success: false, error: err.message };
   }
