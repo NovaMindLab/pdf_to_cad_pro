@@ -8,7 +8,7 @@
     "deploy": "node auto_deploy/deploy.js",
     "build-python": "py -3 -m PyInstaller --onefile --name pdf-converter --workpath converter/build --distpath converter/dist --exclude-module pandas --exclude-module scipy --exclude-module pyarrow --exclude-module matplotlib converter/converter.py",
     "pack": "electron-builder --dir",
-    "dist": "npm run build-python && electron-builder",
+    "dist": "electron-builder",
     "build:win": "electron-builder --win"
   },
   "build": {

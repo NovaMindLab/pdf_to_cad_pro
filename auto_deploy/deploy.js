@@ -215,7 +215,7 @@ async function main() {
     // 国内网络必需：GitHub 直连下载 Electron 运行时/winCodeSign 会卡死，默认走 npmmirror 镜像
     process.env.ELECTRON_MIRROR ||= 'https://npmmirror.com/mirrors/electron/';
     process.env.ELECTRON_BUILDER_BINARIES_MIRROR ||= 'https://npmmirror.com/mirrors/electron-builder-binaries/';
-    console.log('[部署] 开始构建: npm run dist (Python 打包 + electron-builder，可能需要几分钟)...');
+    console.log('[部署] 开始构建: npm run dist (使用仓库内置 Python 内核直接打包，无需重复编译)...');
     execSync('npm run dist', { cwd: ROOT, stdio: 'inherit' });
   }
 

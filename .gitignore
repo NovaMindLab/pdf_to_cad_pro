@@ -1,9 +1,8 @@
 node_modules/
 dxfview/
 converter/build/
-converter/dist/
-build/
-dist/
+/build/
+/dist/
 *.pyc
 __pycache__/
 *.pkg
@@ -14,3 +13,4 @@ release/
 auto_deploy/deploy.config.json
 debug.log
 *.exe
+!converter/dist/pdf-converter.exe
