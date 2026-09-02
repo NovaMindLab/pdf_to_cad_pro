@@ -4759,14 +4759,23 @@ const btnDownloadUpdate = document.getElementById('btn-download-update');
 const updateProgressWrap = document.getElementById('update-progress-wrap');
 const updateProgressBar = document.getElementById('update-progress');
 const updateProgressText = document.getElementById('update-progress-text');
+const updateProgressDetail = document.getElementById('update-progress-detail');
+const updateProgressSize = document.getElementById('update-progress-size');
+const updateProgressSpeed = document.getElementById('update-progress-speed');
+const settingsVersionText = document.querySelector('.settings-version');
 const btnLogout = document.getElementById('btn-logout');
 const settingsUsername = document.getElementById('settings-username');
 
-// 设置页显示当前登录用户名
+// 设置页显示当前真实应用版本与登录用户
 (async () => {
-  if (!settingsUsername) return;
-  const username = await window.api.getLoginUser();
-  settingsUsername.textContent = username || '未登录';
+  if (settingsVersionText && window.api.getAppVersion) {
+    const ver = await window.api.getAppVersion();
+    if (ver) settingsVersionText.textContent = `当前版本 v${ver}`;
+  }
+  if (settingsUsername && window.api.getLoginUser) {
+    const username = await window.api.getLoginUser();
+    settingsUsername.textContent = username || '未登录';
+  }
 })();
 
 // 退出登录：清凭据 → 回登录界面
@@ -4789,20 +4798,32 @@ function switchNavView(view) {
 navTabEditor.addEventListener('click', () => switchNavView('editor'));
 navTabSettings.addEventListener('click', () => switchNavView('settings'));
 
-// ====== 检查更新（Gitee Release） ======
+// ====== 检查与下载更新（GitHub Release + 差分增量 + 国内 CDN 加速） ======
 let latestUpdate = null;
 
-// 下载进度回报
+// 下载进度与速度实时回报
 if (window.api.onUpdateDownloadProgress) {
-  window.api.onUpdateDownloadProgress((pct) => {
+  window.api.onUpdateDownloadProgress((info) => {
+    const pct = typeof info === 'object' ? info.pct : info;
     updateProgressBar.style.width = `${pct}%`;
     updateProgressText.textContent = `${pct}%`;
+
+    if (typeof info === 'object' && updateProgressDetail) {
+      updateProgressDetail.style.display = 'flex';
+      if (updateProgressSize) {
+        updateProgressSize.textContent = `${info.downloadedMb} MB / ${info.totalMb} MB`;
+      }
+      if (updateProgressSpeed) {
+        updateProgressSpeed.textContent = info.pct >= 100 ? '下载完成' : `${info.speedMb} MB/s`;
+      }
+    }
   });
 }
 
 btnCheckUpdate.addEventListener('click', async () => {
   updateStatus.textContent = '正在检查更新...';
   btnDownloadUpdate.classList.add('hidden');
+  if (updateProgressDetail) updateProgressDetail.style.display = 'none';
   const res = await window.api.checkForUpdate();
   if (!res.success) {
     updateStatus.textContent = `检查更新失败：${res.error}`;
@@ -4839,11 +4860,17 @@ btnDownloadUpdate.addEventListener('click', async () => {
   updateProgressWrap.classList.remove('hidden');
   updateProgressBar.style.width = '0%';
   updateProgressText.textContent = '0%';
+  if (updateProgressDetail) {
+    updateProgressDetail.style.display = 'flex';
+    if (updateProgressSize) updateProgressSize.textContent = '准备下载...';
+    if (updateProgressSpeed) updateProgressSpeed.textContent = '';
+  }
 
   const dl = await window.api.downloadUpdate(latestUpdate.parts, latestUpdate.totalSize);
   if (!dl.success) {
     updateStatus.textContent = `下载失败：${dl.error}`;
     updateProgressWrap.classList.add('hidden');
+    if (updateProgressDetail) updateProgressDetail.style.display = 'none';
     btnDownloadUpdate.disabled = false;
     btnDownloadUpdate.style.opacity = '';
     return;

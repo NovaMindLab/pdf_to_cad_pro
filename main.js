@@ -996,7 +996,10 @@ ipcMain.handle('check-for-update', async () => {
   }
 });
 
-// 下载更新（支持镜像加速与分卷兼容），通过 update-download-progress 事件回报进度（0-100）
+// 获取当前应用版本
+ipcMain.handle('get-app-version', () => app.getVersion());
+
+// 下载更新（支持镜像加速与分卷兼容），通过 update-download-progress 事件回报详细进度
 ipcMain.handle('download-update', async (event, parts, totalSize) => {
   try {
     if (!Array.isArray(parts) || parts.length === 0) {
@@ -1005,6 +1008,7 @@ ipcMain.handle('download-update', async (event, parts, totalSize) => {
     const tmpDir = app.getPath('temp');
     let downloaded = 0;
     const partPaths = [];
+    let effectiveTotal = Number(totalSize) || 0;
 
     for (const part of parts) {
       const dest = path.join(tmpDir, part.name);
@@ -1020,14 +1024,52 @@ ipcMain.handle('download-update', async (event, parts, totalSize) => {
           if (!res.ok || !res.body) {
             throw new Error(`HTTP ${res.status}`);
           }
+
+          const lenHeader = Number(res.headers.get('content-length'));
+          if (lenHeader && (!effectiveTotal || effectiveTotal < lenHeader)) {
+            effectiveTotal = lenHeader;
+          }
+
           const nodeStream = Readable.fromWeb(res.body);
+          let lastTime = Date.now();
+          let lastDownloaded = downloaded;
+          let currentSpeed = 0;
+          let lastEmit = 0;
+
           nodeStream.on('data', (chunk) => {
             downloaded += chunk.length;
-            const pct = totalSize ? Math.min(99, Math.round((downloaded / totalSize) * 100)) : 0;
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send('update-download-progress', pct);
+            const now = Date.now();
+
+            // 每 250ms 计算一次瞬时下载速度 (Byte/s)
+            if (now - lastTime >= 250) {
+              const deltaBytes = downloaded - lastDownloaded;
+              const deltaSec = (now - lastTime) / 1000;
+              currentSpeed = deltaSec > 0 ? Math.round(deltaBytes / deltaSec) : 0;
+              lastDownloaded = downloaded;
+              lastTime = now;
+            }
+
+            // 节流推送：每 100ms 最多推一次 IPC，防止高频事件阻塞渲染进程
+            if (now - lastEmit >= 100 || (effectiveTotal && downloaded >= effectiveTotal)) {
+              lastEmit = now;
+              const pct = effectiveTotal ? Math.min(99, Math.round((downloaded / effectiveTotal) * 100)) : 0;
+
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                // Windows 任务栏图标同步显示进度
+                mainWindow.setProgressBar(pct > 0 ? pct / 100 : 0);
+                mainWindow.webContents.send('update-download-progress', {
+                  pct,
+                  downloadedBytes: downloaded,
+                  totalBytes: effectiveTotal,
+                  speedBytes: currentSpeed,
+                  downloadedMb: (downloaded / 1024 / 1024).toFixed(1),
+                  totalMb: (effectiveTotal / 1024 / 1024).toFixed(1),
+                  speedMb: (currentSpeed / 1024 / 1024).toFixed(1)
+                });
+              }
             }
           });
+
           await pipeline(nodeStream, fs.createWriteStream(dest));
           success = true;
           break;
@@ -1038,6 +1080,7 @@ ipcMain.handle('download-update', async (event, parts, totalSize) => {
       }
 
       if (!success) {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setProgressBar(-1);
         return { success: false, error: `所有下载源均失败: ${lastErr ? lastErr.message : '未知错误'}` };
       }
       partPaths.push(dest);
@@ -1060,10 +1103,20 @@ ipcMain.handle('download-update', async (event, parts, totalSize) => {
     }
 
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('update-download-progress', 100);
+      mainWindow.setProgressBar(-1);
+      mainWindow.webContents.send('update-download-progress', {
+        pct: 100,
+        downloadedBytes: downloaded,
+        totalBytes: effectiveTotal || downloaded,
+        speedBytes: 0,
+        downloadedMb: (downloaded / 1024 / 1024).toFixed(1),
+        totalMb: ((effectiveTotal || downloaded) / 1024 / 1024).toFixed(1),
+        speedMb: '0.0'
+      });
     }
     return { success: true, path: finalPath };
   } catch (err) {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setProgressBar(-1);
     return { success: false, error: err.message };
   }
 });

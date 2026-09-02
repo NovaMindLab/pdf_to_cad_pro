@@ -92,6 +92,9 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('platform-request', params),
 
   // ====== 应用内自动更新 ======
+  getAppVersion: () =>
+    ipcRenderer.invoke('get-app-version'),
+
   checkForUpdate: () =>
     ipcRenderer.invoke('check-for-update'),
 
