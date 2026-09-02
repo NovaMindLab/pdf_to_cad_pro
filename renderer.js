@@ -4814,10 +4814,20 @@ btnCheckUpdate.addEventListener('click', async () => {
   }
   latestUpdate = res;
   const hasFiles = res.parts && res.parts.length > 0;
-  updateStatus.textContent = `发现新版本 ${res.latestVersion}（当前 v${res.currentVersion}）${hasFiles ? '' : '，但该版本未上传安装包，请前往发布页手动下载'}`;
-  if (hasFiles) {
-    btnDownloadUpdate.classList.remove('hidden');
+  if (!hasFiles) {
+    updateStatus.textContent = `发现新版本 ${res.latestVersion}（当前 v${res.currentVersion}），但该版本未上传可用文件，请前往发布页手动下载`;
+    return;
   }
+
+  const sizeMb = (res.totalSize / 1024 / 1024).toFixed(1);
+  if (res.isPatch) {
+    updateStatus.innerHTML = `发现新版本 <strong>${res.latestVersion}</strong>（当前 v${res.currentVersion}）<br><span style="color:#10b981;font-size:12px;">⚡ 支持极速差分增量升级（仅 ${sizeMb} MB，秒级重启生效）</span>`;
+    btnDownloadUpdate.textContent = '立即增量升级';
+  } else {
+    updateStatus.innerHTML = `发现新版本 <strong>${res.latestVersion}</strong>（当前 v${res.currentVersion}）<br><span style="font-size:12px;color:var(--text-secondary,#999);">📦 全量安装包（约 ${sizeMb} MB）</span>`;
+    btnDownloadUpdate.textContent = '下载并安装更新';
+  }
+  btnDownloadUpdate.classList.remove('hidden');
 });
 
 btnDownloadUpdate.addEventListener('click', async () => {
@@ -4825,7 +4835,7 @@ btnDownloadUpdate.addEventListener('click', async () => {
   btnDownloadUpdate.disabled = true;
   btnDownloadUpdate.querySelector('span')?.remove();
   btnDownloadUpdate.style.opacity = '0.7';
-  updateStatus.textContent = '正在下载更新...';
+  updateStatus.textContent = latestUpdate.isPatch ? '正在极速下载增量更新包...' : '正在下载更新...';
   updateProgressWrap.classList.remove('hidden');
   updateProgressBar.style.width = '0%';
   updateProgressText.textContent = '0%';
@@ -4841,11 +4851,14 @@ btnDownloadUpdate.addEventListener('click', async () => {
 
   updateProgressBar.style.width = '100%';
   updateProgressText.textContent = '100%';
-  updateStatus.textContent = '下载完成，正在启动安装程序...';
-  const inst = await window.api.installUpdate(dl.path);
+  updateStatus.textContent = latestUpdate.isPatch ? '下载完成，正在替换并重启应用...' : '下载完成，正在启动安装程序...';
+  
+  const inst = await window.api.installUpdate(dl.path, latestUpdate.isPatch);
   if (!inst.success) {
-    updateStatus.textContent = `启动安装失败：${inst.error}`;
+    updateStatus.textContent = `更新失败：${inst.error}`;
     btnDownloadUpdate.disabled = false;
     btnDownloadUpdate.style.opacity = '';
+  } else if (inst.message) {
+    updateStatus.textContent = inst.message;
   }
 });

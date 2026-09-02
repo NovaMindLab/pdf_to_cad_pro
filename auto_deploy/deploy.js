@@ -1,5 +1,5 @@
 /**
- * auto_deploy/deploy.js — 一键构建安装包并发布到 Gitee Release（应用内自动升级源）
+ * auto_deploy/deploy.js — 一键构建安装包并发布到 GitHub Release（应用内自动升级源）
  *
  * 用法:
  *   node auto_deploy/deploy.js             # 版本号 patch +0.0.1 后构建并发布
@@ -8,8 +8,8 @@
  *   node auto_deploy/deploy.js --no-bump   # 不改版本号，直接构建发布
  *   node auto_deploy/deploy.js --dry-run   # 只做版本号计算与安装包查找，不构建不上传
  *
- * 发布目标: gitee.com/hqxluoyang/pdf_to_cad_pro_update
- * 发布完成后，客户端「检查更新」即可拉到新版本。
+ * 发布目标: github.com/NovaMindLab/pdf_to_cad_pro
+ * 支持单文件 2GB 上传（无需分卷切片），客户端通过国内 CDN 加速节点高速下载。
  */
 const path = require('path');
 const fs = require('fs');
@@ -20,18 +20,19 @@ const PKG_PATH = path.join(ROOT, 'package.json');
 const CONFIG_PATH = path.join(__dirname, 'deploy.config.json');
 const RELEASE_DIR = path.join(ROOT, 'release');
 
-const OWNER = 'hqxluoyang';
-const REPO = 'pdf_to_cad_pro_update';
-const API_BASE = 'https://gitee.com/api/v5';
+const OWNER = 'NovaMindLab';
+const REPO = 'pdf_to_cad_pro';
+const API_BASE = 'https://api.github.com';
+const UPLOAD_BASE = 'https://uploads.github.com';
 
 // ====== 读取配置（token 放在 deploy.config.json，已被 .gitignore 排除，勿提交） ======
 if (!fs.existsSync(CONFIG_PATH)) {
   console.error(`[部署] 缺少配置文件: ${CONFIG_PATH}`);
-  console.error('请创建该文件并写入: { "access_token": "你的Gitee私人令牌" }');
+  console.error('请创建该文件并写入: { "access_token": "你的GitHub Personal Access Token" }');
   process.exit(1);
 }
 const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
-const TOKEN = config.access_token;
+const TOKEN = config.access_token || config.github_token;
 if (!TOKEN) {
   console.error('[部署] deploy.config.json 中缺少 access_token');
   process.exit(1);
@@ -40,6 +41,7 @@ if (!TOKEN) {
 // ====== 解析参数 ======
 const args = process.argv.slice(2);
 const isDryRun = args.includes('--dry-run');
+const isSkipBuild = args.includes('--skip-build');
 const bumpType = args.includes('--major')
   ? 'major'
   : args.includes('--minor')
@@ -57,59 +59,68 @@ function bumpVersion(version, type) {
   return parts.join('.');
 }
 
-function giteeFetch(apiPath, options = {}) {
-  const url = apiPath.includes('?')
-    ? `${API_BASE}${apiPath}&access_token=${TOKEN}`
-    : `${API_BASE}${apiPath}?access_token=${TOKEN}`;
-  return fetch(url, options);
+function githubFetch(apiPath, options = {}) {
+  const url = apiPath.startsWith('http') ? apiPath : `${API_BASE}${apiPath}`;
+  const headers = {
+    'Authorization': `Bearer ${TOKEN}`,
+    'Accept': 'application/vnd.github+json',
+    'User-Agent': 'PDF-to-CAD-Deployer',
+    ...(options.headers || {})
+  };
+  return fetch(url, { ...options, headers });
 }
 
 async function getReleaseByTag(tag) {
-  const res = await giteeFetch(`/repos/${OWNER}/${REPO}/releases/tags/${encodeURIComponent(tag)}`);
+  const res = await githubFetch(`/repos/${OWNER}/${REPO}/releases/tags/${encodeURIComponent(tag)}`);
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`查询 Release 失败: HTTP ${res.status} ${await res.text()}`);
   return res.json();
 }
 
 async function createRelease(tag, name, body) {
-  const res = await giteeFetch(`/repos/${OWNER}/${REPO}/releases`, {
+  const res = await githubFetch(`/repos/${OWNER}/${REPO}/releases`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tag_name: tag, name, body, prerelease: false, target_commitish: 'master' }),
+    body: JSON.stringify({ tag_name: tag, name, body, draft: false, prerelease: false }),
   });
   if (!res.ok) throw new Error(`创建 Release 失败: HTTP ${res.status} ${await res.text()}`);
   return res.json();
 }
 
-// 上传单个文件（同名旧附件先删除再传，带重试）
+// 上传单个文件到 GitHub Release（同名旧附件先删除再传，带重试）
 async function uploadFile(releaseId, filePath) {
   const fileName = path.basename(filePath);
   const stat = fs.statSync(filePath);
-  // 1. 删除同名旧附件
-  const detailRes = await giteeFetch(`/repos/${OWNER}/${REPO}/releases/${releaseId}`);
+
+  // 1. 检查并删除同名旧附件
+  const detailRes = await githubFetch(`/repos/${OWNER}/${REPO}/releases/${releaseId}`);
   if (detailRes.ok) {
     const detail = await detailRes.json();
     for (const asset of detail.assets || []) {
       if (asset.name === fileName) {
-        console.log(`[部署] 删除旧附件: ${fileName}`);
-        await giteeFetch(`/repos/${OWNER}/${REPO}/releases/${releaseId}/attach_files/${asset.id}`, { method: 'DELETE' });
+        console.log(`[部署] 删除同名旧附件: ${fileName}`);
+        await githubFetch(`/repos/${OWNER}/${REPO}/releases/assets/${asset.id}`, { method: 'DELETE' });
       }
     }
   }
 
-  // 2. multipart 上传（重试 3 次）
-  console.log(`[部署] 上传附件: ${fileName} (${(stat.size / 1024 / 1024).toFixed(1)} MB)`);
+  // 2. 二进制上传附件（GitHub 支持单文件最大 2GB）
+  console.log(`[部署] 上传附件到 GitHub: ${fileName} (${(stat.size / 1024 / 1024).toFixed(1)} MB)...`);
   let lastErr = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const form = new FormData();
       const buf = fs.readFileSync(filePath);
-      form.append('file', new Blob([buf]), fileName);
-      const res = await giteeFetch(`/repos/${OWNER}/${REPO}/releases/${releaseId}/attach_files`, {
+      const uploadUrl = `${UPLOAD_BASE}/repos/${OWNER}/${REPO}/releases/${releaseId}/assets?name=${encodeURIComponent(fileName)}`;
+      const res = await githubFetch(uploadUrl, {
         method: 'POST',
-        body: form,
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': String(stat.size)
+        },
+        body: buf
       });
       if (!res.ok) throw new Error(`HTTP ${res.status} ${await res.text()}`);
+      console.log(`[部署] 附件上传成功!`);
       return await res.json();
     } catch (err) {
       lastErr = err;
@@ -120,25 +131,47 @@ async function uploadFile(releaseId, filePath) {
   throw lastErr;
 }
 
-// Gitee Release 单附件上限 100MB，超限自动分卷为 90MB 的 .gpartNN 文件
-const MAX_PART_SIZE = 90 * 1024 * 1024;
+// 生成轻量差分增量包 (提取 win-unpacked/resources/app.asar 打包为 update-patch-v*.zip)
+function createPatchPackage(version) {
+  const unpackedAsar = path.join(RELEASE_DIR, 'win-unpacked', 'resources', 'app.asar');
+  let asarPath = unpackedAsar;
 
-function splitInstaller(filePath) {
-  const stat = fs.statSync(filePath);
-  if (stat.size <= MAX_PART_SIZE) return [filePath];
-
-  console.log(`[部署] 安装包 ${(stat.size / 1024 / 1024).toFixed(1)} MB 超过 Gitee 100MB 限制，自动分卷...`);
-  const buf = fs.readFileSync(filePath);
-  const parts = [];
-  let idx = 0;
-  for (let off = 0; off < buf.length; off += MAX_PART_SIZE) {
-    idx++;
-    const partPath = path.join(RELEASE_DIR, `${path.basename(filePath)}.gpart${String(idx).padStart(2, '0')}`);
-    fs.writeFileSync(partPath, buf.subarray(off, Math.min(off + MAX_PART_SIZE, buf.length)));
-    parts.push(partPath);
+  if (!fs.existsSync(asarPath)) {
+    try {
+      const candidates = fs.readdirSync(RELEASE_DIR, { recursive: true })
+        .filter((f) => String(f).toLowerCase().endsWith('app.asar'));
+      if (candidates.length > 0) asarPath = path.join(RELEASE_DIR, candidates[0]);
+    } catch { /* ignore */ }
   }
-  console.log(`[部署] 已分卷为 ${parts.length} 个文件`);
-  return parts;
+
+  if (!fs.existsSync(asarPath)) {
+    console.warn('[部署] 未在构建产物中找到 app.asar，跳过差分增量包生成');
+    return null;
+  }
+
+  const patchZip = path.join(RELEASE_DIR, `update-patch-v${version}.zip`);
+  const manifest = {
+    version,
+    name: `PDF to CAD Studio v${version}`,
+    target: 'app.asar',
+    size: fs.statSync(asarPath).size,
+    date: new Date().toISOString()
+  };
+  const manifestPath = path.join(RELEASE_DIR, 'patch-manifest.json');
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+
+  try {
+    const asarDir = path.dirname(asarPath);
+    execSync(`tar -acf "${patchZip}" -C "${asarDir}" app.asar -C "${RELEASE_DIR}" patch-manifest.json`);
+    const zipStat = fs.statSync(patchZip);
+    console.log(`[部署] 差分增量包已生成: ${path.basename(patchZip)} (${(zipStat.size / 1024 / 1024).toFixed(2)} MB)`);
+    return patchZip;
+  } catch (err) {
+    console.warn(`[部署] 生成差分包失败: ${err.message}`);
+    return null;
+  } finally {
+    if (fs.existsSync(manifestPath)) fs.unlinkSync(manifestPath);
+  }
 }
 
 // 在 release 目录里找最新的 .exe 安装包（优先 NSIS Setup 安装器）
@@ -156,7 +189,7 @@ function findInstaller() {
 
 async function main() {
   console.log('========================================');
-  console.log('  PDF-to-CAD Studio 自动构建发布');
+  console.log('  PDF-to-CAD Studio GitHub 自动构建发布');
   console.log('========================================');
 
   // 1. 计算并写入新版本号
@@ -176,8 +209,10 @@ async function main() {
   // 2. 构建安装包 (PyInstaller + electron-builder)
   if (isDryRun) {
     console.log('[部署] --dry-run: 跳过构建与上传');
+  } else if (isSkipBuild) {
+    console.log('[部署] --skip-build: 跳过构建，直接使用已有的 release 安装包与 asar 资源');
   } else {
-    // 国内网络必需：GitHub 直连下载 Electron 运行时/winCodeSign 会卡死，默认走 npmmirror 镜像（已设置的不覆盖）
+    // 国内网络必需：GitHub 直连下载 Electron 运行时/winCodeSign 会卡死，默认走 npmmirror 镜像
     process.env.ELECTRON_MIRROR ||= 'https://npmmirror.com/mirrors/electron/';
     process.env.ELECTRON_BUILDER_BINARIES_MIRROR ||= 'https://npmmirror.com/mirrors/electron-builder-binaries/';
     console.log('[部署] 开始构建: npm run dist (Python 打包 + electron-builder，可能需要几分钟)...');
@@ -190,46 +225,45 @@ async function main() {
     console.error(`[部署] 在 ${RELEASE_DIR} 中未找到 .exe 安装包`);
     process.exit(1);
   }
-  console.log(`[部署] 安装包: ${installer.name}`);
+  console.log(`[部署] 找到安装包: ${installer.name}`);
 
   if (isDryRun) {
     console.log('[部署] --dry-run 结束，未发布');
     return;
   }
 
-  // 4. 创建 / 复用 Gitee Release
-  console.log(`[部署] 检查 Gitee Release ${tag} ...`);
+  // 4. 创建 / 复用 GitHub Release
+  console.log(`[部署] 检查 GitHub Release ${tag} ...`);
   let release = await getReleaseByTag(tag);
   if (release) {
     console.log(`[部署] Release ${tag} 已存在 (id=${release.id})，复用`);
   } else {
-    console.log(`[部署] 创建 Release ${tag} ...`);
+    console.log(`[部署] 创建 GitHub Release ${tag} ...`);
     release = await createRelease(
       tag,
       `PDF-to-CAD Studio ${tag}`,
-      `## 更新内容\n\n- 版本 ${tag}\n\n> 发布时间: ${new Date().toLocaleString('zh-CN')}`
+      `## 更新内容\n\n- 版本 ${tag}\n- ⚡ 支持极速差分增量升级（补丁包仅 ~2MB）\n\n> 发布时间: ${new Date().toLocaleString('zh-CN')}`
     );
-    console.log(`[部署] Release 创建成功 (id=${release.id})`);
+    console.log(`[部署] GitHub Release 创建成功 (id=${release.id})`);
   }
 
-  // 5. 分卷（如超限）并上传安装包
-  const parts = splitInstaller(installer.file);
-  for (const part of parts) {
-    await uploadFile(release.id, part);
+  // 5. 上传完整安装包 与 差分增量包
+  await uploadFile(release.id, installer.file);
+
+  const patchZip = createPatchPackage(newVersion);
+  if (patchZip && fs.existsSync(patchZip)) {
+    await uploadFile(release.id, patchZip);
   }
 
-  // 清理本地分卷临时文件
-  for (const part of parts) {
-    if (part !== installer.file && fs.existsSync(part)) fs.unlinkSync(part);
-  }
-
-  // 6. 校验客户端检查更新接口
-  const latestRes = await giteeFetch(`/repos/${OWNER}/${REPO}/releases/latest`);
+  // 6. 校验最新 Release
+  const latestRes = await githubFetch(`/repos/${OWNER}/${REPO}/releases/latest`);
   if (latestRes.ok) {
     const latest = await latestRes.json();
     console.log('----------------------------------------');
-    console.log(`[部署] 完成! 最新 Release: ${latest.tag_name}`);
-    console.log(`[部署] 客户端「设置 -> 检查更新」即可收到本次更新`);
+    console.log(`[部署] 发布完成! 最新 Release: ${latest.tag_name}`);
+    console.log(`[部署] 资产列表: ${latest.assets.map((a) => a.name).join(', ')}`);
+    console.log(`[部署] Release 页面: ${latest.html_url}`);
+    console.log(`[部署] 客户端「设置 -> 检查更新」即可自动拉取差分包秒级升级`);
   }
 }
 

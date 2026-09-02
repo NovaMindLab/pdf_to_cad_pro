@@ -98,8 +98,8 @@ contextBridge.exposeInMainWorld('api', {
   downloadUpdate: (url, name) =>
     ipcRenderer.invoke('download-update', url, name),
 
-  installUpdate: (filePath) =>
-    ipcRenderer.invoke('install-update', filePath),
+  installUpdate: (filePath, isPatch) =>
+    ipcRenderer.invoke('install-update', filePath, isPatch),
 
   onUpdateDownloadProgress: (callback) =>
     ipcRenderer.on('update-download-progress', (event, pct) => callback(pct)),

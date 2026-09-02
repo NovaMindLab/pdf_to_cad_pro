@@ -904,9 +904,17 @@ ipcMain.handle('platform-request', async (event, { url, method, data, token }) =
   }
 });
 
-// ====== 应用内自动更新（Gitee Release） ======
-// 升级仓库为公开仓库，读取 Release 无需鉴权，请勿将私有 token 打包进客户端
-const UPDATE_RELEASE_API = 'https://gitee.com/api/v5/repos/hqxluoyang/pdf_to_cad_pro_update/releases/latest';
+// ====== 应用内自动更新（GitHub Release + 国内 CDN 镜像加速） ======
+const GITHUB_OWNER = 'NovaMindLab';
+const GITHUB_REPO = 'pdf_to_cad_pro';
+const UPDATE_RELEASE_API = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`;
+
+// 国内多线路高速下载镜像（自动容灾重试）
+const ACCELERATED_MIRRORS = [
+  (url) => `https://ghfast.top/${url}`,
+  (url) => `https://ghproxy.net/${url}`,
+  (url) => url // 原始 GitHub 直连
+];
 
 // 解析 "v1.2.3" / "1.2.3-rc" 之类的 tag 为 [major, minor, patch]
 function parseVersion(v) {
@@ -931,49 +939,64 @@ function isNewerVersion(remote, local) {
 // 检查更新：获取最新 Release 并与当前版本比较
 ipcMain.handle('check-for-update', async () => {
   try {
-    const res = await fetch(UPDATE_RELEASE_API);
+    let res;
+    // 先尝试直接请求 GitHub API，如失败则尝试代理
+    try {
+      res = await fetch(UPDATE_RELEASE_API, {
+        headers: { 'User-Agent': 'PDF-to-CAD-Client' }
+      });
+    } catch {
+      res = await fetch(`https://ghfast.top/${UPDATE_RELEASE_API}`, {
+        headers: { 'User-Agent': 'PDF-to-CAD-Client' }
+      });
+    }
+    if (res.status === 404) {
+      return { success: true, hasUpdate: false, currentVersion: app.getVersion(), notes: '暂无新版本发布' };
+    }
     if (!res.ok) return { success: false, error: `HTTP ${res.status}` };
     const rel = await res.json();
     const currentVersion = app.getVersion();
     const latestVersion = rel.tag_name || rel.name || '';
     const assets = rel.assets || [];
-    // 分卷文件（>100MB 自动切分的 .gpartNN）优先，否则找单个 .exe
+
+    // 优先寻找差分增量包 update-patch-*.zip
+    const patchAsset = assets.find((a) => /^update-patch-.*\.zip$/i.test(a.name));
+    const exeAsset = assets.find((a) => /\.exe$/i.test(a.name) && !/\.gpart\d+$/i.test(a.name));
     const partAssets = assets
       .filter((a) => /\.gpart\d+$/i.test(a.name))
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-    const exeAsset = assets.find((a) => /\.exe$/i.test(a.name) && !/\.gpart\d+$/i.test(a.name));
-    const parts = partAssets.length
-      ? partAssets.map((a) => ({ name: a.name, url: a.browser_download_url, size: a.size }))
-      : exeAsset
-        ? [{ name: exeAsset.name, url: exeAsset.browser_download_url, size: exeAsset.size }]
-        : [];
-    // releases/latest 接口不带 size 字段，用 HEAD 请求补全（进度条需要）
-    for (const p of parts) {
-      if (!p.size) {
-        try {
-          const h = await fetch(p.url, { method: 'HEAD' });
-          p.size = Number(h.headers.get('content-length')) || 0;
-        } catch {
-          p.size = 0;
-        }
-      }
+
+    let isPatch = false;
+    let parts = [];
+
+    if (patchAsset) {
+      isPatch = true;
+      parts = [{ name: patchAsset.name, url: patchAsset.browser_download_url, size: patchAsset.size }];
+    } else if (exeAsset) {
+      isPatch = false;
+      parts = [{ name: exeAsset.name, url: exeAsset.browser_download_url, size: exeAsset.size }];
+    } else if (partAssets.length) {
+      isPatch = false;
+      parts = partAssets.map((a) => ({ name: a.name, url: a.browser_download_url, size: a.size }));
     }
+
     return {
       success: true,
       hasUpdate: isNewerVersion(latestVersion, currentVersion),
+      isPatch,
       currentVersion,
       latestVersion,
       notes: rel.body || '',
       parts,
       totalSize: parts.reduce((s, p) => s + (p.size || 0), 0),
-      releaseUrl: rel.html_url || 'https://gitee.com/hqxluoyang/pdf_to_cad_pro_update/releases'
+      releaseUrl: rel.html_url || `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases`
     };
   } catch (err) {
     return { success: false, error: err.message };
   }
 });
 
-// 下载更新（支持分卷，自动合并），通过 update-download-progress 事件回报进度（0-100）
+// 下载更新（支持镜像加速与分卷兼容），通过 update-download-progress 事件回报进度（0-100）
 ipcMain.handle('download-update', async (event, parts, totalSize) => {
   try {
     if (!Array.isArray(parts) || parts.length === 0) {
@@ -984,30 +1007,58 @@ ipcMain.handle('download-update', async (event, parts, totalSize) => {
     const partPaths = [];
 
     for (const part of parts) {
-      const res = await fetch(part.url);
-      if (!res.ok || !res.body) return { success: false, error: `HTTP ${res.status}` };
       const dest = path.join(tmpDir, part.name);
-      const nodeStream = Readable.fromWeb(res.body);
-      nodeStream.on('data', (chunk) => {
-        downloaded += chunk.length;
-        const pct = totalSize ? Math.min(99, Math.round((downloaded / totalSize) * 100)) : 0;
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('update-download-progress', pct);
+      let success = false;
+      let lastErr = null;
+
+      // 依次尝试国内 CDN 加速节点下载
+      for (const getUrl of ACCELERATED_MIRRORS) {
+        const downloadUrl = getUrl(part.url);
+        try {
+          console.log(`[更新] 尝试从镜像下载: ${downloadUrl}`);
+          const res = await fetch(downloadUrl);
+          if (!res.ok || !res.body) {
+            throw new Error(`HTTP ${res.status}`);
+          }
+          const nodeStream = Readable.fromWeb(res.body);
+          nodeStream.on('data', (chunk) => {
+            downloaded += chunk.length;
+            const pct = totalSize ? Math.min(99, Math.round((downloaded / totalSize) * 100)) : 0;
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('update-download-progress', pct);
+            }
+          });
+          await pipeline(nodeStream, fs.createWriteStream(dest));
+          success = true;
+          break;
+        } catch (err) {
+          lastErr = err;
+          console.warn(`[更新] 镜像下载失败，切换备用线路: ${err.message}`);
         }
-      });
-      await pipeline(nodeStream, fs.createWriteStream(dest));
+      }
+
+      if (!success) {
+        return { success: false, error: `所有下载源均失败: ${lastErr ? lastErr.message : '未知错误'}` };
+      }
       partPaths.push(dest);
     }
 
-    // 合并分卷为完整安装包
-    const finalName = parts[0].name.replace(/\.gpart\d+$/i, '');
-    const finalPath = path.join(tmpDir, finalName);
-    const out = fs.openSync(finalPath, 'w');
-    for (const p of partPaths) {
-      fs.writeSync(out, fs.readFileSync(p));
-      fs.unlinkSync(p);
+    // 若为分卷文件则合并，若为单个 exe 或 zip 补丁包则直接使用
+    let finalPath;
+    const isSplit = parts.some((p) => /\.gpart\d+$/i.test(p.name));
+    if (isSplit && partPaths.length > 1) {
+      const finalName = parts[0].name.replace(/\.gpart\d+$/i, '');
+      finalPath = path.join(tmpDir, finalName);
+      const out = fs.openSync(finalPath, 'w');
+      for (const p of partPaths) {
+        fs.writeSync(out, fs.readFileSync(p));
+        fs.unlinkSync(p);
+      }
+      fs.closeSync(out);
+    } else {
+      finalPath = partPaths[0];
     }
-    fs.closeSync(out);
+
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-download-progress', 100);
     }
@@ -1017,12 +1068,67 @@ ipcMain.handle('download-update', async (event, parts, totalSize) => {
   }
 });
 
-// 启动安装程序并退出当前应用
-ipcMain.handle('install-update', async (event, filePath) => {
+// 安装更新：支持差分补丁秒级自重启替换，或全量安装包启动
+ipcMain.handle('install-update', async (event, filePath, isPatch) => {
   try {
     if (!filePath || !fs.existsSync(filePath)) {
-      return { success: false, error: '安装包不存在' };
+      return { success: false, error: '更新文件不存在' };
     }
+
+    if (isPatch) {
+      // 差分增量升级模式：解压 zip 提取新 app.asar，通过后台 bat 覆盖并自重启
+      const tmpExtractDir = path.join(app.getPath('temp'), `pdf_to_cad_patch_${Date.now()}`);
+      fs.mkdirSync(tmpExtractDir, { recursive: true });
+
+      try {
+        child_process.execSync(`tar -xf "${filePath}" -C "${tmpExtractDir}"`);
+      } catch (e) {
+        return { success: false, error: `补丁解压失败: ${e.message}` };
+      }
+
+      const newAsar = path.join(tmpExtractDir, 'app.asar');
+      if (!fs.existsSync(newAsar)) {
+        return { success: false, error: '补丁包中未找到 app.asar 文件' };
+      }
+
+      // 若处于开发调试模式，仅做解压和校验提示
+      if (!app.isPackaged) {
+        return {
+          success: true,
+          message: '【调试模式】差分补丁已解压校验通过（在打包运行环境下将自动静默替换 app.asar 并重启生效）'
+        };
+      }
+
+      const destAsar = path.join(process.resourcesPath, 'app.asar');
+      const appExe = app.getPath('exe');
+      const updateBat = path.join(app.getPath('temp'), 'apply_patch.bat');
+
+      // 编写 Windows 独立替换与自重启脚本
+      const batScript = [
+        '@echo off',
+        'chcp 65001 >nul',
+        'ping 127.0.0.1 -n 2 >nul',
+        `copy /Y "${newAsar}" "${destAsar}" >nul`,
+        `start "" "${appExe}"`,
+        `rd /s /q "${tmpExtractDir}" 2>nul`,
+        `del "%~f0"`
+      ].join('\r\n');
+
+      fs.writeFileSync(updateBat, batScript, 'utf-8');
+
+      const child = child_process.spawn('cmd.exe', ['/c', updateBat], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true
+      });
+      child.unref();
+
+      // 退出当前应用，释放文件锁以供批处理脚本覆盖
+      app.exit(0);
+      return { success: true };
+    }
+
+    // 全量安装升级模式：启动 Setup.exe
     const err = await shell.openPath(filePath);
     if (err) return { success: false, error: err };
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
