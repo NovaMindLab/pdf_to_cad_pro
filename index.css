@@ -227,6 +227,85 @@ body {
   display: flex;
   height: calc(100vh - 38px); /* subtract titlebar height */
   overflow: hidden;
+  position: relative;
+}
+
+/* 云端转换成功后的「保存到云端」浮动条 */
+.cloud-save-toast {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 400;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(34, 211, 238, 0.35);
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  animation: fadeIn 0.25s ease;
+}
+
+.cloud-save-toast.hidden {
+  display: none;
+}
+
+.cloud-save-toast > svg {
+  width: 18px;
+  height: 18px;
+  color: #34d399;
+  flex-shrink: 0;
+}
+
+.cloud-save-toast .cloud-toast-text {
+  font-size: 13px;
+  color: var(--text-main);
+  white-space: nowrap;
+}
+
+.cloud-save-toast .cloud-toast-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 14px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: #052e16;
+  background: linear-gradient(135deg, #34d399, #10b981);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.cloud-save-toast .cloud-toast-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.cloud-save-toast .cloud-toast-btn:hover {
+  filter: brightness(1.1);
+  box-shadow: 0 3px 12px rgba(52, 211, 153, 0.4);
+}
+
+.cloud-save-toast .cloud-toast-close {
+  padding: 2px 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.cloud-save-toast .cloud-toast-close:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 /* Modal Overlay and Container */
@@ -1185,6 +1264,78 @@ body {
   filter: none;
 }
 
+/* 清除缓存按钮：幽灵样式小按钮，紧跟在导入/打开按钮后面 */
+.history-table .btn-clear-cache {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding: 5px 10px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: #f87171;
+  background: transparent;
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  border-radius: 20px;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: all 0.18s ease;
+}
+
+.history-table .btn-clear-cache svg {
+  width: 12px;
+  height: 12px;
+}
+
+.history-table .btn-clear-cache:hover:not(:disabled) {
+  color: #fca5a5;
+  border-color: rgba(248, 113, 113, 0.7);
+  background: rgba(248, 113, 113, 0.08);
+}
+
+.history-table .btn-clear-cache:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+/* 删除云端文件按钮：红字幽灵样式（主行 PDF 与云端 CAD 子行共用） */
+.history-table .btn-cloud-delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding: 5px 12px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: #f87171;
+  background: transparent;
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  border-radius: 20px;
+  cursor: pointer;
+  vertical-align: middle;
+  white-space: nowrap;
+  transition: all 0.18s ease;
+}
+
+.history-table .btn-cloud-delete svg {
+  width: 12px;
+  height: 12px;
+}
+
+.history-table .btn-cloud-delete:hover:not(:disabled) {
+  color: #fff;
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+  border-color: transparent;
+  box-shadow: 0 2px 10px rgba(239, 68, 68, 0.4);
+}
+
+.history-table .btn-cloud-delete:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
 .history-table .subgraphs-inner {
   padding: 10px 16px 10px 44px;
   display: flex;
@@ -1194,8 +1345,8 @@ body {
 
 .history-table .subgraph-item {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 10px;
   padding: 10px 14px;
   background: rgba(255, 255, 255, 0.02);
   border-radius: 8px;
@@ -1213,14 +1364,63 @@ body {
 }
 
 .history-table .subgraph-item .subgraph-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-color);
   font-weight: 500;
 }
 
+.history-table .subgraph-item .dot-badge {
+  flex-shrink: 0;
+}
+
 .history-table .subgraph-item .subgraph-time {
+  flex-shrink: 0;
   color: var(--text-muted);
   font-size: 11px;
   font-family: 'SF Mono', 'Cascadia Code', monospace;
+}
+
+/* 子行「打开 CAD」按钮：青色描边幽灵样式，hover 时填充 */
+.history-table .btn-child-open {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 4px;
+  padding: 5px 13px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: #67e8f9;
+  background: rgba(34, 211, 238, 0.08);
+  border: 1px solid rgba(34, 211, 238, 0.4);
+  border-radius: 16px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.18s ease;
+}
+
+.history-table .btn-child-open svg {
+  width: 12px;
+  height: 12px;
+}
+
+.history-table .btn-child-open:hover {
+  color: #06222b;
+  background: linear-gradient(135deg, #22d3ee, #0ea5b7);
+  border-color: transparent;
+  box-shadow: 0 2px 10px rgba(34, 211, 238, 0.4);
+  transform: translateY(-1px);
+}
+
+.history-table .btn-child-open:active {
+  transform: translateY(0);
+  filter: brightness(0.95);
 }
 
 /* 子图弹窗卡片列表（复用于已存子图弹窗） */
@@ -1302,6 +1502,19 @@ body {
   background-color: #10b981;
   border-radius: 50%;
   box-shadow: 0 0 6px #10b981;
+}
+
+.dot-badge-info {
+  color: #38bdf8;
+}
+
+.dot-badge-info::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  background-color: #38bdf8;
+  border-radius: 50%;
+  box-shadow: 0 0 6px #38bdf8;
 }
 
 /* 嵌套子图样式 */
@@ -1682,6 +1895,37 @@ body {
   background: var(--border-color);
   margin: 0 4px;
   flex-shrink: 0;
+}
+
+/* 保存到云端按钮（编辑工具栏）：青色强调样式 */
+.tool-btn-cloud {
+  color: #22d3ee;
+  border-color: rgba(34, 211, 238, 0.35);
+  background: rgba(34, 211, 238, 0.08);
+}
+
+.tool-btn-cloud:hover:not(:disabled) {
+  color: #67e8f9;
+  border-color: rgba(34, 211, 238, 0.7);
+  background: rgba(34, 211, 238, 0.15);
+}
+
+.tool-btn-cloud:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+/* 有未保存修改时：琥珀色高亮 + 呼吸脉冲提醒 */
+.tool-btn-cloud.has-changes {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.65);
+  background: rgba(251, 191, 36, 0.12);
+  animation: cloudSavePulse 1.6s ease-in-out infinite;
+}
+
+@keyframes cloudSavePulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.35); }
+  50%      { box-shadow: 0 0 10px 2px rgba(251, 191, 36, 0.25); }
 }
 
 /* ============================================================

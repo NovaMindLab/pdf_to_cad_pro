@@ -15,6 +15,65 @@ def get_midpoint(p1, p2):
 def is_chinese_char(c):
     return '\u4e00' <= c <= '\u9fff'
 
+def char_is_rotated(obj):
+    """
+    Detect rotated/oblique text by the shear components of its matrix.
+    pdfplumber's `upright` only catches 90-degree rotations (vertical CJK),
+    but CAD drawings also contain labels rotated at arbitrary angles (e.g.
+    59deg / -47deg fibre labels running along slanted cables). Those have
+    non-zero matrix[1]/matrix[2]. Relying on `upright` alone lets them fall
+    through to horizontal grouping, where they get merged with wrong width
+    factors and overlap neighbours -> ghost text.
+    """
+    if obj.get('object_type') != 'char':
+        return False
+    m = obj.get('matrix')
+    if not m or len(m) < 4:
+        return False
+    # pdfplumber matrix = (a, b, c, d, e, f). The shear/rotation components are
+    # b (matrix[1]) and c (matrix[2]); d (matrix[3]) is vertical scale, which is
+    # non-zero for every normal upright char. Checking matrix[3] would therefore
+    # flag every character as rotated.
+    return abs(m[1]) > 1e-3 or abs(m[2]) > 1e-3
+
+def dedup_words(words):
+    """
+    Removes duplicate words caused by PDF double-drawing (fake bold / shadow layers):
+    same text with strongly overlapping bounding boxes => keep only one copy.
+    """
+    result = []
+    for w in sorted(words, key=lambda w: (w['top'], w['x0'])):
+        dup = False
+        # Only compare against recently kept words (words are sorted, far ones can't overlap)
+        for s in result[-60:]:
+            if s['text'] != w['text']:
+                continue
+            ox = min(s['x1'], w['x1']) - max(s['x0'], w['x0'])
+            oy = min(s['bottom'], w['bottom']) - max(s['top'], w['top'])
+            if ox > 0 and oy > 0:
+                a1 = (s['x1'] - s['x0']) * (s['bottom'] - s['top'])
+                a2 = (w['x1'] - w['x0']) * (w['bottom'] - w['top'])
+                if (ox * oy) > 0.5 * min(a1, a2):
+                    dup = True
+                    break
+        if not dup:
+            result.append(w)
+    return result
+
+
+def natural_text_width(text, size):
+    """Estimated natural width: CJK=1em, ASCII=0.6em, space=0.3em."""
+    w = 0.0
+    for ch in text:
+        if ch == ' ':
+            w += size * 0.3
+        elif ord(ch) > 0x2E80:
+            w += size
+        else:
+            w += size * 0.6
+    return w
+
+
 def group_words_into_lines(words, tolerance=3.0):
     """
     Groups pdfplumber word dictionaries into cohesive text lines based on vertical baseline alignment
@@ -22,32 +81,42 @@ def group_words_into_lines(words, tolerance=3.0):
     """
     if not words:
         return []
-    
-    # Group words that have similar vertical alignment (top coordinate)
+
+    # --- 1. Deduplicate double-drawn words (fake bold / shadow) to avoid overlapping text ---
+    words = dedup_words(words)
+
+    # --- 2. Group words into lines by vertical span overlap (handles mixed sizes / sub-superscripts) ---
     lines = []
     # Sort primarily by vertical top coordinate, secondarily by horizontal x0
     sorted_words = sorted(words, key=lambda w: (w['top'], w['x0']))
-    
-    current_line = []
-    current_top = None
-    
+
     for word in sorted_words:
-        if current_top is None:
-            current_top = word['top']
-            current_line.append(word)
-        else:
-            word_height = word['bottom'] - word['top']
-            thresh = max(tolerance, word_height * 0.4)
-            if abs(word['top'] - current_top) <= thresh:
-                current_line.append(word)
-            else:
-                # Close current line group, start new one
-                lines.append(current_line)
-                current_line = [word]
-                current_top = word['top']
-                
-    if current_line:
-        lines.append(current_line)
+        word_h = word['bottom'] - word['top']
+        placed = False
+        # Search ALL existing lines: among lines that vertically overlap the
+        # word, pick the one whose nearest word is horizontally closest.
+        # (Choosing by max vertical overlap alone splits mixed CJK/ASCII lines
+        # whose baselines differ by ~1pt into two interleaved lines.)
+        best_line = None
+        best_dist = None
+        for line in lines:
+            line_top = min(w['top'] for w in line)
+            line_bottom = max(w['bottom'] for w in line)
+            line_h = line_bottom - line_top
+            # Vertical overlap between the word and the line
+            ov = min(word['bottom'], line_bottom) - max(word['top'], line_top)
+            if ov > 0.3 * min(word_h, line_h) or ov > 0.5 * max(word_h, line_h):
+                # Horizontal distance to the nearest word of this line
+                dist = min(min(abs(word['x0'] - w2['x1']), abs(w2['x0'] - word['x1']))
+                           for w2 in line)
+                if dist < word_h * 4 and (best_dist is None or dist < best_dist):
+                    best_dist = dist
+                    best_line = line
+        if best_line is not None:
+            best_line.append(word)
+            placed = True
+        if not placed:
+            lines.append([word])
         
     # Process each horizontal line group: sort left-to-right and merge words
     merged_lines = []
@@ -59,23 +128,42 @@ def group_words_into_lines(words, tolerance=3.0):
         # treat them as separate text entities in CAD.
         parts = [sorted_line[0]]
         x0 = sorted_line[0]['x0']
+        x1 = sorted_line[0]['x1']
         top = sorted_line[0]['top']
         bottom = sorted_line[0]['bottom']
         font_name = sorted_line[0].get('fontname', 'Standard')
         font_size = sorted_line[0].get('size', bottom - top)
-        
+
         merged_text = sorted_line[0]['text']
         
         for p in sorted_line[1:]:
             gap = p['x0'] - parts[-1]['x1']
             current_char_height = p['bottom'] - p['top']
-            
-            # If the horizontal gap is larger than 3 times the character height,
-            # split it into a separate CAD text entity (e.g. columns)
-            if gap > current_char_height * 3.0:
+
+            # --- Check compression-ratio compatibility ---
+            # A word's own compression = real PDF width / natural width.
+            # Mixing words with very different compression into one TEXT
+            # entity forces a single average width factor, so the compressed
+            # parts are drawn too wide and overlap neighbours. Split instead.
+            p_size = p.get('size', current_char_height) or current_char_height
+            p_natural = natural_text_width(p['text'], p_size)
+            p_ratio = (p['x1'] - p['x0']) / p_natural if p_natural > 1e-3 else 1.0
+            cur_natural = natural_text_width(merged_text, font_size)
+            cur_ratio = (x1 - x0) / cur_natural if cur_natural > 1e-3 else 1.0
+            ratio_mismatch = (
+                p_natural > 1e-3 and cur_natural > 1e-3
+                and abs(p_ratio - cur_ratio) > 0.25 * max(p_ratio, cur_ratio)
+            )
+
+            # If the horizontal gap exceeds ~0.8x character height (clearly
+            # separate words / table cells / columns), split into separate CAD
+            # text entities so every word keeps its true x position and does
+            # not overlap neighbours when drawn left-to-right from one insert.
+            if gap > current_char_height * 0.8 or ratio_mismatch:
                 merged_lines.append({
                     'text': merged_text,
                     'x0': x0,
+                    'x1': x1,
                     'top': top,
                     'bottom': bottom,
                     'size': font_size,
@@ -84,6 +172,7 @@ def group_words_into_lines(words, tolerance=3.0):
                 # Reset for new text entity
                 parts = [p]
                 x0 = p['x0']
+                x1 = p['x1']
                 top = p['top']
                 bottom = p['bottom']
                 font_name = p.get('fontname', 'Standard')
@@ -104,14 +193,16 @@ def group_words_into_lines(words, tolerance=3.0):
                 # Update bounds
                 bottom = max(bottom, p['bottom'])
                 top = min(top, p['top'])
+                x1 = max(x1, p['x1'])
                 # Approximate font size as average of sizes
                 p_size = p.get('size', p['bottom'] - p['top'])
                 font_size = (font_size + p_size) / 2.0
-                
+
         if merged_text:
             merged_lines.append({
                 'text': merged_text,
                 'x0': x0,
+                'x1': x1,
                 'top': top,
                 'bottom': bottom,
                 'size': font_size,
@@ -144,7 +235,23 @@ def convert_pdf_to_dxf(pdf_path, dxf_path):
         for page_idx, page in enumerate(pdf.pages):
             page_w = page.width
             page_h = page.height
-            
+
+            # 线段去重 + 坐标圆整：PDF 常有双绘/重复线段；浮点运算产生的
+            # 坐标噪声（如 124.12200000000007）会显著膨胀 DXF 文本体积。
+            _seen_line_keys = set()
+
+            def add_line_dedup(p0, p1):
+                p0 = (round(p0[0], 2), round(p0[1], 2))
+                p1 = (round(p1[0], 2), round(p1[1], 2))
+                ax, ay, bx, by = p0[0], p0[1], p1[0], p1[1]
+                if ax > bx or (ax == bx and ay > by):
+                    ax, ay, bx, by = bx, by, ax, ay
+                key = (ax, ay, bx, by)
+                if key in _seen_line_keys:
+                    return
+                _seen_line_keys.add(key)
+                msp.add_line(p0, p1, dxfattribs={'layer': 'LINES'})
+
             # --- 1. Draw Lines ---
             for line in page.lines:
                 pts = line.get('pts', [])
@@ -154,12 +261,12 @@ def convert_pdf_to_dxf(pdf_path, dxf_path):
                 else:
                     x0, y0 = line['x0'], line['top']
                     x1, y1 = line['x1'], line['bottom']
-                
+
                 x0_cad = x0 + current_x_offset
                 y0_cad = page_h - y0
                 x1_cad = x1 + current_x_offset
                 y1_cad = page_h - y1
-                msp.add_line((x0_cad, y0_cad), (x1_cad, y1_cad), dxfattribs={'layer': 'LINES'})
+                add_line_dedup((x0_cad, y0_cad), (x1_cad, y1_cad))
                 
             # --- 2. Draw Rectangles ---
             for rect in page.rects:
@@ -174,10 +281,10 @@ def convert_pdf_to_dxf(pdf_path, dxf_path):
                 # Check if it is actually a thin line represented as a filled rectangle
                 if w <= 5.0:  # Very thin vertical line
                     x_mid = (x0 + x1) / 2
-                    msp.add_line((x_mid, y_top), (x_mid, y_bottom), dxfattribs={'layer': 'LINES'})
+                    add_line_dedup((x_mid, y_top), (x_mid, y_bottom))
                 elif h <= 5.0:  # Very thin horizontal line
                     y_mid = (y_top + y_bottom) / 2
-                    msp.add_line((x0, y_mid), (x1, y_mid), dxfattribs={'layer': 'LINES'})
+                    add_line_dedup((x0, y_mid), (x1, y_mid))
                 else:
                     # closed rectangle polyline
                     vertices = [
@@ -186,9 +293,10 @@ def convert_pdf_to_dxf(pdf_path, dxf_path):
                         (x1, y_bottom),
                         (x0, y_bottom)
                     ]
-                    # lwpolyline requires list of (x, y) tuples. 
+                    # lwpolyline requires list of (x, y) tuples.
                     # dxfattribs flags: 1 = closed polyline
-                    msp.add_lwpolyline(vertices, dxfattribs={'layer': 'RECTS', 'flags': 1})
+                    msp.add_lwpolyline([(round(v[0], 2), round(v[1], 2)) for v in vertices],
+                                       dxfattribs={'layer': 'RECTS', 'flags': 1})
                 
             # --- 3. Draw Curves / Polylines ---
             for curve in page.curves:
@@ -215,51 +323,113 @@ def convert_pdf_to_dxf(pdf_path, dxf_path):
                         m2 = get_midpoint(clean_pts[2], clean_pts[3])
                         m1 = (m1[0] + current_x_offset, page_h - m1[1])
                         m2 = (m2[0] + current_x_offset, page_h - m2[1])
-                        msp.add_line(m1, m2, dxfattribs={'layer': 'LINES'})
+                        add_line_dedup(m1, m2)
                         continue
                     elif L1 <= THICKNESS and L3 <= THICKNESS and L0 > L1 * 2 and L2 > L3 * 2:
                         m1 = get_midpoint(clean_pts[1], clean_pts[2])
                         m2 = get_midpoint(clean_pts[3], clean_pts[0])
                         m1 = (m1[0] + current_x_offset, page_h - m1[1])
                         m2 = (m2[0] + current_x_offset, page_h - m2[1])
-                        msp.add_line(m1, m2, dxfattribs={'layer': 'LINES'})
+                        add_line_dedup(m1, m2)
                         continue
 
                 if len(pts) >= 2:
-                    vertices = [(x + current_x_offset, page_h - y) for x, y in pts]
+                    vertices = [(round(x + current_x_offset, 2), round(page_h - y, 2)) for x, y in pts]
                     msp.add_lwpolyline(vertices, dxfattribs={'layer': 'POLYLINES'})
                     
             # --- 4. Draw Texts ---
-            # Extract words with font info
-            words = page.extract_words(extra_attrs=["fontname", "size"])
+            # Split rotated / oblique chars out first. Covers BOTH 90-degree
+            # vertical CJK labels AND arbitrary-angle slanted labels (fibre /
+            # cable annotations). If merged into horizontal lines, the whole
+            # slanted label gets squished into one horizontal blob (tiny width
+            # factor) that overlaps its neighbours -> ghost text.
+            rotated_chars = [c for c in page.chars if char_is_rotated(c)]
+            if rotated_chars:
+                text_page = page.filter(lambda obj: not char_is_rotated(obj))
+            else:
+                text_page = page
+
+            # Extract words with font info (horizontal text only)
+            words = text_page.extract_words(extra_attrs=["fontname", "size"])
             grouped_text_lines = group_words_into_lines(words)
-            
+
             for text_line in grouped_text_lines:
                 x = text_line['x0'] + current_x_offset
-                # pdfplumber bottom is distance from top of page. 
+                # pdfplumber bottom is distance from top of page.
                 # DXF insert point for text baseline is bottom of text.
                 y = page_h - text_line['bottom']
                 text = text_line['text']
                 size = text_line['size']
-                
+
                 # Sanitize text to remove control characters/newlines that break DXF
                 text = "".join(ch for ch in text if ch >= ' ' or ch == '\t')
-                
+
                 if size <= 0.1:
                     size = 8.0 # fallback
-                
+
                 # Scale down height slightly to match CAD fonts aspect ratio and prevent overlaps
                 height = size * 0.75
-                    
+
+                # --- Width factor: keep the drawn width equal to the PDF's real span ---
+                # CAD-exported PDFs often contain horizontally compressed text
+                # (e.g. 2 CJK chars spanning far less than 2em). Without a width
+                # factor, CAD draws such text 2-3x wider than the original and it
+                # overlaps neighbouring labels. Compute the ratio between the
+                # real PDF span and the estimated natural text width.
+                text_attribs = {
+                    'layer': 'TEXTS',
+                    'height': round(height, 2),
+                    'insert': (round(x, 2), round(y, 2))
+                }
+                span = text_line.get('x1', 0) - text_line.get('x0', 0)
+                if span > 1e-3 and text:
+                    natural_w = natural_text_width(text, height)
+                    if natural_w > 1e-3:
+                        width_factor = span / natural_w
+                        # Clamp to a sane range; 1.0 means no scaling needed
+                        if 0.05 < width_factor < 20.0 and abs(width_factor - 1.0) > 0.02:
+                            text_attribs['width'] = width_factor
+
                 # Add text entity
-                msp.add_text(
-                    text,
-                    dxfattribs={
-                        'layer': 'TEXTS',
-                        'height': height,
-                        'insert': (x, y)
-                    }
-                )
+                msp.add_text(text, dxfattribs=text_attribs)
+
+            # --- 4b. Rotated / vertical labels ---
+            # The renderer has no rotation support, so emit each rotated char
+            # as its own upright TEXT entity at its exact PDF position. The
+            # chars stack vertically (like traditional vertical CJK layout),
+            # stay legible and never overlap neighbouring horizontal labels.
+            emitted_rotated = []
+            for c in sorted(rotated_chars, key=lambda c: (c['top'], c['x0'])):
+                ch = c['text']
+                if not ch or not ch.strip():
+                    continue
+                # Char-level dedup: PDF double-drawing also happens on vertical labels
+                dup = False
+                for s in emitted_rotated[-40:]:
+                    if s['text'] != ch:
+                        continue
+                    ox = min(s['x1'], c['x1']) - max(s['x0'], c['x0'])
+                    oy = min(s['bottom'], c['bottom']) - max(s['top'], c['top'])
+                    if ox > 0 and oy > 0:
+                        a1 = (s['x1'] - s['x0']) * (s['bottom'] - s['top'])
+                        a2 = (c['x1'] - c['x0']) * (c['bottom'] - c['top'])
+                        if (ox * oy) > 0.5 * min(a1, a2):
+                            dup = True
+                            break
+                if dup:
+                    continue
+                emitted_rotated.append(c)
+
+                size = c.get('size') or (c['bottom'] - c['top'])
+                if size <= 0.1:
+                    size = 8.0
+                x = c['x0'] + current_x_offset
+                y = page_h - c['bottom']
+                msp.add_text(ch, dxfattribs={
+                    'layer': 'TEXTS',
+                    'height': round(size * 0.75, 2),
+                    'insert': (round(x, 2), round(y, 2))
+                })
                 
             # Update layout offset for next page
             current_x_offset += page_w + page_gap

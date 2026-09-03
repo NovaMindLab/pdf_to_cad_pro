@@ -283,7 +283,9 @@ class ThreeCadEngine {
     }
 
     const worldH = height * 1.2;
-    const worldW = worldH * aspect;
+    // Apply DXF width factor (group code 41) so compressed text stays compressed
+    const widthFactor = (t.widthFactor && t.widthFactor > 0.05 && t.widthFactor < 20) ? t.widthFactor : 1;
+    const worldW = worldH * aspect * widthFactor;
 
     const planeGeo = new THREE.PlaneGeometry(worldW, worldH);
     const planeMat = new THREE.MeshBasicMaterial({
@@ -823,26 +825,36 @@ btnConvert.addEventListener('click', async () => {
     selectedOutputPath = response.saved_to; // update to exact saved path
     currentPdfHash = response.pdf_hash || ''; // Store the PDF hash
 
-    // Load and render side-by-side comparison
-    if (response.pdf_pages && response.pdf_pages.length > 0) {
-      if (placeholderView) placeholderView.classList.add('hidden');
-      if (comparisonContainer) comparisonContainer.classList.remove('hidden');
-      loadAndRenderComparison(response.pdf_pages[0], response.saved_to);
+    const isCloud = currentCloudSourceId != null;
+    if (isCloud) {
+      // 记录转换出的 CAD 到本地缓存（图纸列表可展开直接打开）
+      try {
+        const pdfName = (selectedInputPath || '').split(/[\\/]/).pop() || 'drawing.pdf';
+        const cadName = pdfName.replace(/\.pdf$/i, '') + '.dxf';
+        window.api.recordCadCache(currentCloudSourceId, response.saved_to, cadName);
+        if (btnSaveCloud) btnSaveCloud.classList.remove('hidden');
+      } catch (e) {
+        console.error('[Convert] 记录 CAD 缓存失败:', e);
+      }
     }
 
-    if (currentCloudSourceId != null) {
-      // 记录转换出的 CAD 到本地缓存（图纸列表可展开直接打开）
-      const pdfName = (selectedInputPath || '').split(/[\\/]/).pop() || 'drawing.pdf';
-      const cadName = pdfName.replace(/\.pdf$/i, '') + '.dxf';
-      window.api.recordCadCache(currentCloudSourceId, response.saved_to, cadName);
-      // 云端导入：保持弹窗打开，让用户点「保存」关联回平台
-      if (btnSaveCloud) btnSaveCloud.classList.remove('hidden');
-    } else {
-      // 本地导入：自动关闭弹窗
-      setTimeout(() => {
-        convertModal.classList.add('hidden');
-      }, 1500);
-    }
+    // 先关闭弹窗（600ms 让用户看到成功提示），之后再开始渲染。
+    // 大图纸 DXF 同步解析会阻塞 UI 数秒，若在弹窗打开时解析，
+    // 弹窗会卡住关不掉、按钮点不动。
+    const pages = (response.pdf_pages && response.pdf_pages.length > 0) ? response.pdf_pages : null;
+    const savedTo = response.saved_to;
+    setTimeout(() => {
+      try { convertModal.classList.add('hidden'); } catch (e) {}
+      if (isCloud) {
+        try { showCloudSaveToast(); } catch (e) { console.error('[Convert] 显示保存浮动条失败:', e); }
+      }
+      if (pages) {
+        if (placeholderView) placeholderView.classList.add('hidden');
+        if (comparisonContainer) comparisonContainer.classList.remove('hidden');
+        loadAndRenderComparison(pages[0], savedTo).catch((err) =>
+          console.error('[Convert] 渲染比对视图失败:', err));
+      }
+    }, 600);
 
   } else {
     // Show Error State
@@ -860,23 +872,63 @@ btnOpenExplorer.addEventListener('click', () => {
 });
 
 // 保存：把转换出的 CAD 上传平台并关联到原始 PDF（仅云端导入的文件可关联）
+async function saveCloudCad() {
+  console.log('[Debug] 点击了 保存, cloudId=', currentCloudSourceId, ', path=', selectedOutputPath);
+  if (currentCloudSourceId == null || !selectedOutputPath) return false;
+  const res = await window.api.platformUploadFile(selectedOutputPath, currentCloudSourceId, null, true);
+  if (res.success) {
+    hideCloudSaveToast();
+    if (btnSaveCloud) btnSaveCloud.classList.add('hidden');
+    customAlert('保存成功！转换结果已关联到原始 PDF，可在图纸列表中查看。');
+    return true;
+  }
+  customAlert(`保存失败：${res.error}`);
+  return false;
+}
+
 if (btnSaveCloud) {
   btnSaveCloud.addEventListener('click', async () => {
-    console.log('[Debug] 点击了 保存, cloudId=', currentCloudSourceId, ', path=', selectedOutputPath);
-    if (currentCloudSourceId == null || !selectedOutputPath) return;
+    if (btnSaveCloud.disabled) return;
     btnSaveCloud.disabled = true;
     const label = btnSaveCloud.querySelector('span');
     if (label) label.textContent = '保存中...';
-    const res = await window.api.platformUploadFile(selectedOutputPath, currentCloudSourceId);
+    await saveCloudCad();
     btnSaveCloud.disabled = false;
     if (label) label.textContent = '保存';
-    if (res.success) {
-      btnSaveCloud.classList.add('hidden');
-      customAlert('保存成功！转换结果已关联到原始 PDF，可在图纸列表中查看。');
-    } else {
-      customAlert(`保存失败：${res.error}`);
-    }
   });
+}
+
+// --- 主界面顶部「保存到云端」浮动条（云端导入转换成功后出现） ---
+const cloudSaveToast = document.getElementById('cloud-save-toast');
+let cloudSaveBusy = false;
+
+function showCloudSaveToast() {
+  if (!cloudSaveToast) return;
+  cloudSaveToast.classList.remove('hidden');
+}
+
+function hideCloudSaveToast() {
+  if (cloudSaveToast) cloudSaveToast.classList.add('hidden');
+}
+
+if (cloudSaveToast) {
+  const toastSaveBtn = document.getElementById('cloud-toast-save');
+  const toastCloseBtn = document.getElementById('cloud-toast-close');
+  if (toastSaveBtn) {
+    toastSaveBtn.addEventListener('click', async () => {
+      if (cloudSaveBusy) return;
+      cloudSaveBusy = true;
+      const label = toastSaveBtn.querySelector('span');
+      if (label) label.textContent = '保存中...';
+      await saveCloudCad();
+      cloudSaveBusy = false;
+      if (label) label.textContent = '保存到云端';
+    });
+  }
+  if (toastCloseBtn) {
+    // 关闭浮动条 = 本次不保存（CAD 已在本地缓存，图纸列表里仍可打开）
+    toastCloseBtn.addEventListener('click', hideCloudSaveToast);
+  }
 }
 
 // Reset Listeners
@@ -985,6 +1037,7 @@ async function loadHistory() {
           e.stopPropagation();
           console.log('[Debug-OpenCAD] 点击打开 CAD:', latestCad.path);
           historyModal.classList.add('hidden');
+          currentCloudSourceId = file.id; // 标记来源：编辑后可「保存到云端」
           const ok = await loadDxfOnly(latestCad.path);
           if (!ok) {
             // 打开失败 → 回退：用本地缓存的 PDF 走转换流程
@@ -1010,6 +1063,29 @@ async function loadHistory() {
         });
       }
       actionsTd.appendChild(importBtn);
+
+      // 清除缓存按钮：有 PDF 缓存或 CAD 转换缓存时显示
+      if (cachedEntry || localCads.length > 0) {
+        const clearBtn = document.createElement('button');
+        clearBtn.className = 'btn-clear-cache';
+        clearBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg><span>清除缓存</span>';
+        clearBtn.title = '删除本地缓存的 PDF 及转换出的 CAD 文件';
+        clearBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const ok = await customConfirm(`确定清除「${file.file_name}」的本地缓存吗？\n将删除已下载的 PDF 和转换出的 CAD 文件（不影响云端）。`);
+          if (!ok) return;
+          clearBtn.disabled = true;
+          const res = await window.api.clearFileCache(file.id);
+          if (res && res.success) {
+            customAlert(`已清除缓存（PDF×${res.removed.pdf}，CAD×${res.removed.cad}）`);
+            loadHistory(); // 刷新列表状态
+          } else {
+            customAlert('清除失败：' + ((res && res.error) || '未知错误'));
+            clearBtn.disabled = false;
+          }
+        });
+        actionsTd.appendChild(clearBtn);
+      }
     }
     tr.appendChild(actionsTd);
 
@@ -1043,8 +1119,18 @@ async function loadHistory() {
         item.className = 'subgraph-item';
         item.innerHTML = `
           <span class="subgraph-name">${child.file_name}</span>
+          <span class="dot-badge dot-badge-info" title="已保存到云端，与原始 PDF 关联">云端</span>
           <span class="subgraph-time">${formatCloudFileSize(child.file_size)}</span>
         `;
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn-cloud-delete';
+        delBtn.title = `从云端删除该 CAD（不影响原始 PDF）：${child.file_name}`;
+        delBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg><span>删除</span>';
+        delBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          handleCloudDelete(child, delBtn);
+        });
+        item.appendChild(delBtn);
         inner.appendChild(item);
       });
 
@@ -1058,13 +1144,13 @@ async function loadHistory() {
           <span class="subgraph-time">${formatCloudFileSize(cad.size)}</span>
         `;
         const openBtn = document.createElement('button');
-        openBtn.className = 'action-btn btn-import-cloud is-cached';
-        openBtn.style.padding = '2px 10px';
+        openBtn.className = 'btn-child-open';
         openBtn.title = `在编辑器中打开：${cad.path}`;
-        openBtn.innerHTML = '<span>打开</span>';
+        openBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg><span>打开 CAD</span>';
         openBtn.addEventListener('click', async (e) => {
           e.stopPropagation();
           historyModal.classList.add('hidden');
+          currentCloudSourceId = file.id; // 标记来源：编辑后可「保存到云端」
           loadDxfOnly(cad.path);
         });
         item.appendChild(openBtn);
@@ -1081,6 +1167,24 @@ async function loadHistory() {
       };
     }
   });
+}
+
+// 云端 CAD「单条删除」：调平台 DELETE /folder/file，删除该 CAD，不影响原始 PDF
+async function handleCloudDelete(cadFile, btn) {
+  const name = cadFile.file_name || '该 CAD';
+  if (!(await customConfirm(`确定从云端删除 CAD「${name}」吗？\n单独删除 CAD 不影响原始 PDF。`))) return;
+
+  if (btn) btn.disabled = true;
+  const res = await window.api.platformDeleteFiles([cadFile.id]);
+  if (res && res.success) {
+    // 云端已删，同步清理本地缓存（如有该 CAD 的本地转换文件）
+    try { await window.api.clearFileCache(cadFile.id); } catch (e) { console.warn('[DeleteCloud] 清理本地缓存失败:', e); }
+    customAlert('已删除。');
+    loadHistory(); // 刷新列表
+  } else {
+    customAlert('删除失败：' + ((res && res.error) || '未知错误'));
+    if (btn) btn.disabled = false;
+  }
 }
 
 // 云端 PDF「导入」：下载到本地 pdf 目录 -> 打开转换弹窗并预填路径
@@ -1255,6 +1359,7 @@ function parseDxf(dxfText) {
           if (groupCode === 10) currentEntity.x = parseFloat(value);
           else if (groupCode === 20) currentEntity.y = parseFloat(value);
           else if (groupCode === 40) currentEntity.height = parseFloat(value);
+          else if (groupCode === 41) currentEntity.widthFactor = parseFloat(value);
           else if (groupCode === 1) currentEntity.text = value;
           else if (groupCode === 8) currentEntity.layer = value;
         }
@@ -1284,7 +1389,9 @@ function parseDxf(dxfText) {
   // Pre-calculate cached metrics for high-speed rendering and hit testing
   unique.forEach(ent => {
     if (ent.type === 'TEXT') {
-      ent.tw = (ent.text ? ent.text.length : 0) * (ent.height || 12) * 0.6;
+      // 宽度估算需包含 DXF 宽度因子（压缩文字实际绘制宽度更窄），否则命中测试框偏大
+      const wf = (ent.widthFactor && ent.widthFactor > 0.05 && ent.widthFactor < 20) ? ent.widthFactor : 1;
+      ent.tw = (ent.text ? ent.text.length : 0) * (ent.height || 12) * 0.6 * wf;
       ent.th = (ent.height || 12) * 1.2;
     }
   });
@@ -1548,6 +1655,13 @@ function autoClusterEntities(entities) {
   let legendBounds = null;
   let bestArea = Infinity;
 
+  // 预收集所有 TEXT 及其包围盒（避免对每个候选多段线都全量扫描实体列表）
+  const allTextBounds = [];
+  entities.forEach(e => {
+    if (e.type !== 'TEXT') return;
+    allTextBounds.push({ eb: bb(e) });
+  });
+
   entities.forEach((ent) => {
     if (ent.type !== 'LWPOLYLINE') return;
     const b = bb(ent);
@@ -1556,11 +1670,9 @@ function autoClusterEntities(entities) {
     const area = w * h;
     if (area >= bestArea) return;
     let txtCount = 0;
-    entities.forEach(e => {
-      if (e.type !== 'TEXT') return;
-      const eb = bb(e);
+    for (const { eb } of allTextBounds) {
       if (inside((eb.minX + eb.maxX) / 2, (eb.minY + eb.maxY) / 2, b)) txtCount++;
-    });
+    }
     if (txtCount >= 2) { bestArea = area; legendBounds = b; }
   });
 
@@ -1637,28 +1749,94 @@ function autoClusterEntities(entities) {
     }
   });
 
+  // 空间哈希网格：大图纸有数万条短线（虚线/填充图案），
+  // 两两比较是 O(n²)（5 万条 = 23 亿次比较）会卡死界面。
+  // 把每条线的端点注册进网格，只与相邻格子内的线比较。
+  // 格宽取 LINE_EPS：端点相距 ≤ EPS 时格子坐标至多差 1，3×3 邻域即覆盖。
+  const CELL = LINE_EPS;
+  const grid = new Map();
+  shortLines.forEach(idx => {
+    const e = entities[idx];
+    for (const pt of [[e.x0, e.y0], [e.x1, e.y1]]) {
+      const k = Math.floor(pt[0] / CELL) + ',' + Math.floor(pt[1] / CELL);
+      if (!grid.has(k)) grid.set(k, []);
+      grid.get(k).push(idx);
+    }
+  });
+
   const adj = new Map();
-  for (let a = 0; a < shortLines.length; a++) {
-    const ia = shortLines[a], ea = entities[ia];
-    for (let b = a + 1; b < shortLines.length; b++) {
-      const ib = shortLines[b], eb = entities[ib];
-      if (ptClose(ea.x0, ea.y0, eb.x0, eb.y0) || ptClose(ea.x0, ea.y0, eb.x1, eb.y1) ||
-          ptClose(ea.x1, ea.y1, eb.x0, eb.y0) || ptClose(ea.x1, ea.y1, eb.x1, eb.y1)) {
-        if (!adj.has(ia)) adj.set(ia, []);
-        if (!adj.has(ib)) adj.set(ib, []);
-        adj.get(ia).push(ib); adj.get(ib).push(ia);
+  // 数值对键（ia*N+ib）比字符串拼接快数倍；大图纸下候选对可达千万级
+  const N = entities.length || 1;
+  const linkedPairs = new Set();
+  function tryLink(ia, ib) {
+    if (ia === ib) return;
+    const key = ia < ib ? ia * N + ib : ib * N + ia;
+    if (linkedPairs.has(key)) return;
+    const ea = entities[ia], eb = entities[ib];
+    // 廉价预检：任一坐标差超 EPS 直接排除，避免 hypot
+    const d00x = ea.x0 - eb.x0; if (d00x > LINE_EPS || d00x < -LINE_EPS) {} else {
+      const d00y = ea.y0 - eb.y0;
+      if (d00y <= LINE_EPS && d00y >= -LINE_EPS && Math.hypot(d00x, d00y) <= LINE_EPS) return _link(ia, ib);
+    }
+    const d01x = ea.x0 - eb.x1; if (d01x > LINE_EPS || d01x < -LINE_EPS) {} else {
+      const d01y = ea.y0 - eb.y1;
+      if (d01y <= LINE_EPS && d01y >= -LINE_EPS && Math.hypot(d01x, d01y) <= LINE_EPS) return _link(ia, ib);
+    }
+    const d10x = ea.x1 - eb.x0; if (d10x > LINE_EPS || d10x < -LINE_EPS) {} else {
+      const d10y = ea.y1 - eb.y0;
+      if (d10y <= LINE_EPS && d10y >= -LINE_EPS && Math.hypot(d10x, d10y) <= LINE_EPS) return _link(ia, ib);
+    }
+    const d11x = ea.x1 - eb.x1; if (d11x > LINE_EPS || d11x < -LINE_EPS) {} else {
+      const d11y = ea.y1 - eb.y1;
+      if (d11y <= LINE_EPS && d11y >= -LINE_EPS && Math.hypot(d11x, d11y) <= LINE_EPS) return _link(ia, ib);
+    }
+  }
+  function _link(ia, ib) {
+    const key = ia < ib ? ia * N + ib : ib * N + ia;
+    linkedPairs.add(key);
+    if (!adj.has(ia)) adj.set(ia, []);
+    if (!adj.has(ib)) adj.set(ib, []);
+    adj.get(ia).push(ib); adj.get(ib).push(ia);
+  }
+  // 遍历每个格子与自身及右侧/下侧/对角共 5 个前向邻居（覆盖全部 8 邻域且不重复）
+  const NEIGHBOR_OFFSETS = [[0, 0], [1, 0], [0, 1], [1, 1], [1, -1]];
+  for (const [k, idxs] of grid) {
+    const comma = k.indexOf(',');
+    const cx = +k.slice(0, comma), cy = +k.slice(comma + 1);
+    for (let oi = 0; oi < NEIGHBOR_OFFSETS.length; oi++) {
+      const dx = NEIGHBOR_OFFSETS[oi][0], dy = NEIGHBOR_OFFSETS[oi][1];
+      const nIdxs = (dx === 0 && dy === 0) ? idxs : grid.get((cx + dx) + ',' + (cy + dy));
+      if (!nIdxs) continue;
+      const self = (dx === 0 && dy === 0);
+      for (let m = 0; m < idxs.length; m++) {
+        const startN = self ? m + 1 : 0;
+        for (let n = startN; n < nIdxs.length; n++) {
+          tryLink(idxs[m], nIdxs[n]);
+        }
       }
     }
   }
 
   const usedLine = new Set();
+  // compSeen：无论组件最终是否被采纳，都标记其成员已处理。
+  // 否则被拒绝的巨型连通分量（虚线链可达数万条线）会被下一个成员
+  // 作为起点反复重新遍历，导致加载卡死数十秒甚至更久。
+  const compSeen = new Set();
+  const COMP_MEMBER_CAP = 120; // 符号最多 12 笔，超过即不可能是符号，提前放弃
   for (const idx of shortLines) {
-    if (usedLine.has(idx) || !adj.has(idx)) continue;
+    if (compSeen.has(idx) || !adj.has(idx)) continue;
+    // 指针队列代替 shift()：shift 在大分量上是 O(n²)
     const q = [idx], comp = [], vis = new Set([idx]);
-    while (q.length) {
-      const c = q.shift(); comp.push(c);
-      (adj.get(c) || []).forEach(n => { if (!vis.has(n)) { vis.add(n); q.push(n); } });
+    for (let qi = 0; qi < q.length; qi++) {
+      const c = q[qi]; comp.push(c);
+      if (comp.length > COMP_MEMBER_CAP) break; // 超限早退，不再扩展
+      const nbrs = adj.get(c) || [];
+      for (let n = 0; n < nbrs.length; n++) {
+        if (!vis.has(nbrs[n])) { vis.add(nbrs[n]); q.push(nbrs[n]); }
+      }
     }
+    comp.forEach(ci => compSeen.add(ci));
+    if (comp.length > COMP_MEMBER_CAP) continue;
     // Count geometrically-unique strokes so near-duplicate segments
     // (sub-pixel jitter) cannot inflate the component past the cap.
     const uniqKeys = new Set();
@@ -1687,17 +1865,45 @@ function autoClusterEntities(entities) {
 
   const visitedU = new Set();
   const symbolClusters = [];
+  // 空间哈希加速聚类：以单元中心注册到网格（格宽 = 最大盒宽 + 2×合并距离），
+  // 只需与 3×3 邻域内的单元做 boxClose，避免 O(k²) 全量扫描。
+  const CCELL = CORE_MAX + CORE_DIST * 2;
+  const cuGrid = new Map();
+  coreUnits.forEach((u, i) => {
+    const cx = Math.floor(((u.bounds.minX + u.bounds.maxX) / 2) / CCELL);
+    const cy = Math.floor(((u.bounds.minY + u.bounds.maxY) / 2) / CCELL);
+    const k = cx + ',' + cy;
+    if (!cuGrid.has(k)) cuGrid.set(k, []);
+    cuGrid.get(k).push(i);
+  });
+  const coreNeighbors = (i) => {
+    const u = coreUnits[i];
+    const cx = Math.floor(((u.bounds.minX + u.bounds.maxX) / 2) / CCELL);
+    const cy = Math.floor(((u.bounds.minY + u.bounds.maxY) / 2) / CCELL);
+    const out = [];
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const l = cuGrid.get((cx + dx) + ',' + (cy + dy));
+        if (l) for (let m = 0; m < l.length; m++) out.push(l[m]);
+      }
+    }
+    return out;
+  };
   for (let i = 0; i < coreUnits.length; i++) {
     if (visitedU.has(i)) continue;
     const q = [i], cluster = [], vis = new Set([i]);
-    while (q.length) {
-      const cur = q.shift(); cluster.push(cur);
-      for (let j = 0; j < coreUnits.length; j++) {
+    for (let qi = 0; qi < q.length; qi++) {
+      const cur = q[qi]; cluster.push(cur);
+      const neighbors = coreNeighbors(cur);
+      for (let n = 0; n < neighbors.length; n++) {
+        const j = neighbors[n];
         if (!vis.has(j) && boxClose(coreUnits[cur].bounds, coreUnits[j].bounds, CORE_DIST)) {
           vis.add(j); q.push(j);
         }
       }
     }
+    visitedU.add(i);
+    cluster.forEach(ci => visitedU.add(ci));
     symbolClusters.push(cluster);
   }
 
@@ -1905,7 +2111,9 @@ function _drawSingleEntity(ctx, ent, color) {
     ctx.fillStyle = color;
     ctx.save();
     ctx.translate(ent.x, ent.y);
-    ctx.scale(1, -1);
+    // 应用 DXF 宽度因子，与主渲染保持一致
+    const wf = (ent.widthFactor && ent.widthFactor > 0.05 && ent.widthFactor < 20) ? ent.widthFactor : 1;
+    ctx.scale(wf, -1);
     ctx.fillText(ent.text, 0, 0);
     ctx.restore();
   } else if (ent.type === 'GROUP' && ent.children) {
@@ -2019,7 +2227,9 @@ function _buildDragCache(skipIndex, connectedLineIndices) {
     offCtx.fillStyle = item.color;
     offCtx.save();
     offCtx.translate(t.x, t.y);
-    offCtx.scale(1, -1);
+    // 与 THREE 主渲染一致：应用 DXF 宽度因子，压缩文字在拖拽缓存中保持压缩
+    const wf = (t.widthFactor && t.widthFactor > 0.05 && t.widthFactor < 20) ? t.widthFactor : 1;
+    offCtx.scale(wf, -1);
     offCtx.fillText(t.text, 0, 0);
     offCtx.restore();
   }
@@ -2062,9 +2272,13 @@ async function loadAndRenderComparison(pdfPageData, dxfFilePath) {
     if (placeholderView) placeholderView.classList.add('hidden');
     if (comparisonContainer) comparisonContainer.classList.remove('hidden');
 
+    // 大图纸同步解析会阻塞 UI 数秒，先显示 loading 遮罩再开始解析
+    if (cadLoadingOverlay) cadLoadingOverlay.classList.remove('hidden');
+    await new Promise((r) => setTimeout(r, 50));
+
     // 1. Load and parse DXF
     const dxfText = await window.api.readTextFile(dxfFilePath);
-    if (!dxfText) return;
+    if (!dxfText) { if (cadLoadingOverlay) cadLoadingOverlay.classList.add('hidden'); return; }
     const parsedEntities = parseDxf(dxfText);
     dxfEntities = autoClusterEntities(parsedEntities);
     buildSpatialGrid();
@@ -2076,7 +2290,7 @@ async function loadAndRenderComparison(pdfPageData, dxfFilePath) {
 
     // 2. Load PDF page image as base64 Data URL
     const pdfPageBase64 = await window.api.readImageBase64(pdfPageData.path);
-    if (!pdfPageBase64) return;
+    if (!pdfPageBase64) { if (cadLoadingOverlay) cadLoadingOverlay.classList.add('hidden'); return; }
 
     pdfPageWidth = pdfPageData.width;
     pdfPageHeight = pdfPageData.height;
@@ -2098,10 +2312,16 @@ async function loadAndRenderComparison(pdfPageData, dxfFilePath) {
         if (typeof fitViewport === 'function') {
           fitViewport();
         }
+        // 首帧渲染完成，撤掉 loading 遮罩（兜底 2 秒强制撤掉）
+        if (cadLoadingOverlay) cadLoadingOverlay.classList.add('hidden');
       }, 50);
+      setTimeout(() => {
+        if (cadLoadingOverlay) cadLoadingOverlay.classList.add('hidden');
+      }, 2000);
     };
   } catch (error) {
     console.error("Error loading side-by-side comparison view:", error);
+    if (cadLoadingOverlay) cadLoadingOverlay.classList.add('hidden');
   }
 }
 
@@ -2497,6 +2717,7 @@ const MAX_UNDO = 50;
 // --- DOM 引用 ---
 const editorToolbar   = document.getElementById('editor-toolbar');
 const btnExportEdited = document.getElementById('btn-export-edited');
+const btnSaveCloudEdit = document.getElementById('btn-save-cloud-edit');
 const btnExportSubgraph = document.getElementById('btn-export-subgraph');
 const propPanel       = document.getElementById('prop-panel');
 const propPanelTitle  = document.getElementById('prop-panel-title');
@@ -2540,6 +2761,11 @@ function activateEditor(dxfFilePath) {
 
   if (editorToolbar)   editorToolbar.classList.remove('hidden');
   if (btnExportEdited) btnExportEdited.classList.remove('hidden');
+  // 云端来源的图纸：显示「保存到云端」按钮（修改后可一键保存回服务器）
+  if (btnSaveCloudEdit) {
+    if (currentCloudSourceId != null) btnSaveCloudEdit.classList.remove('hidden');
+    else btnSaveCloudEdit.classList.add('hidden');
+  }
   updateExportButtonVisibility();
   if (propPanel)       propPanel.classList.add('hidden');
   if (editorStatusTip) editorStatusTip.textContent = '点击图元选中 · Del 删除 · 工具栏绘制新图元';
@@ -3364,9 +3590,13 @@ function undoAction() {
 function updateDirtyIndicator() {
   if (editorStatusTip) {
     editorStatusTip.textContent = isDirty
-      ? '● 已修改（未导出）· Ctrl+Z 撤销'
+      ? '● 已修改（未保存）· Ctrl+Z 撤销'
       : '点击图元选中 · Del 删除 · 工具栏绘制新图元';
     editorStatusTip.style.color = isDirty ? '#f59e0b' : '';
+  }
+  // 有未保存修改时，「保存到云端」按钮高亮提醒
+  if (btnSaveCloudEdit) {
+    btnSaveCloudEdit.classList.toggle('has-changes', isDirty && currentCloudSourceId != null);
   }
 }
 
@@ -4598,6 +4828,47 @@ if (btnExportEdited) {
       setTimeout(() => updateDirtyIndicator(), 3000);
     } else {
       alert('导出失败：' + (result ? result.message : '未知错误'));
+    }
+  });
+}
+
+// --- 保存到云端：把编辑后的 CAD 写回本地并上传平台，关联原始 PDF ---
+if (btnSaveCloudEdit) {
+  btnSaveCloudEdit.addEventListener('click', async () => {
+    if (btnSaveCloudEdit.disabled) return;
+    if (currentCloudSourceId == null) { customAlert('当前图纸不是云端文件，无法保存到服务器。'); return; }
+    if (!currentDxfPath) { customAlert('尚未加载图纸。'); return; }
+    if (dxfEntities.length === 0) { customAlert('没有可保存的图元。'); return; }
+
+    const label = btnSaveCloudEdit.querySelector('span');
+    const origText = label ? label.textContent : '';
+    btnSaveCloudEdit.disabled = true;
+    if (label) label.textContent = '保存中...';
+    try {
+      // 1. 序列化编辑结果，覆盖本地 DXF 文件（保持本地缓存为最新）
+      const dxfText = serializeDxfToText(dxfEntities);
+      const writeRes = await window.api.saveTextFile(currentDxfPath, dxfText);
+      if (!writeRes || writeRes.status !== 'success') {
+        customAlert('写入本地文件失败：' + (writeRes ? writeRes.message : '未知错误'));
+        return;
+      }
+      // 2. 上传到平台并关联原始 PDF
+      const upRes = await window.api.platformUploadFile(currentDxfPath, currentCloudSourceId, null, true);
+      if (upRes && upRes.success) {
+        isDirty = false;
+        updateDirtyIndicator();
+        if (editorStatusTip) editorStatusTip.textContent = '✔ 已保存到云端';
+        setTimeout(() => updateDirtyIndicator(), 3000);
+        customAlert('保存成功！修改后的 CAD 已上传到云端并关联原始图纸，可在图纸列表中查看。');
+      } else {
+        customAlert('上传失败：' + ((upRes && upRes.error) || '未知错误'));
+      }
+    } catch (err) {
+      console.error('[SaveCloud] 保存到云端失败:', err);
+      customAlert('保存失败：' + err.message);
+    } finally {
+      btnSaveCloudEdit.disabled = false;
+      if (label) label.textContent = origText;
     }
   });
 }

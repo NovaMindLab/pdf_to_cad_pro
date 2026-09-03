@@ -705,6 +705,30 @@ ipcMain.handle('platform-list-folder-files', async (event, folderId) => {
   }
 });
 
+// 云端文件删除：DELETE /folder/file，body { dtlist: [fileId, ...] }
+// 删除原始 PDF 会连带删除其下所有关联 CAD（平台级联）
+ipcMain.handle('platform-delete-files', async (event, fileIds) => {
+  try {
+    if (!platformToken) return { success: false, error: '未登录平台' };
+    const ids = (Array.isArray(fileIds) ? fileIds : [fileIds]).filter(id => id != null);
+    if (!ids.length) return { success: false, error: '缺少文件 id' };
+
+    const res = await httpRequest({
+      url: '/folder/file',
+      method: 'DELETE',
+      data: { dtlist: ids },
+      token: platformToken,
+    });
+    if (res && res.code === 0) {
+      console.log(`[平台] 文件删除成功: dtlist=${JSON.stringify(ids)}`);
+      return { success: true, data: res.data };
+    }
+    return { success: false, error: (res && (res.message || res.msg)) || `HTTP 删除失败` };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 // 云端下载缓存注册表（fileId -> 本地路径），记录已下载过的平台文件
 function getPdfDir() {
   return app.isPackaged
@@ -817,6 +841,49 @@ ipcMain.handle('open-path-externally', async (event, filePath) => {
   }
 });
 
+// 清除某个云端 PDF 的本地缓存（下载的 PDF + 转换出的 CAD），图纸列表「清除缓存」按钮
+ipcMain.handle('clear-file-cache', async (event, fileId) => {
+  try {
+    const key = String(fileId);
+    const removed = { pdf: 0, cad: 0 };
+
+    // 1. 删除缓存的 PDF 文件及注册记录
+    const dlMap = loadCloudDownloads();
+    if (dlMap[key] && dlMap[key].path && fs.existsSync(dlMap[key].path)) {
+      try { fs.unlinkSync(dlMap[key].path); removed.pdf = 1; } catch {}
+    }
+    delete dlMap[key];
+    saveCloudDownloads(dlMap);
+
+    // 2. 删除转换出的 CAD 文件及注册记录
+    const cadMap = loadCadCache();
+    if (Array.isArray(cadMap[key])) {
+      for (const entry of cadMap[key]) {
+        if (entry.path && fs.existsSync(entry.path)) {
+          try { fs.unlinkSync(entry.path); removed.cad++; } catch {}
+          // 顺手删转换时生成的同名 PNG 预览图（xxx_page_0.png）
+          const pngs = path.join(path.dirname(entry.path), path.basename(entry.path, '.dxf') + '_page_');
+          try {
+            const dir = path.dirname(entry.path);
+            for (const f of fs.readdirSync(dir)) {
+              if (f.startsWith(path.basename(pngs)) && f.endsWith('.png')) {
+                try { fs.unlinkSync(path.join(dir, f)); } catch {}
+              }
+            }
+          } catch {}
+        }
+      }
+      delete cadMap[key];
+      saveCadCache(cadMap);
+    }
+
+    console.log(`[缓存] 已清除 fileId=${key} 的本地缓存: PDF×${removed.pdf}, CAD×${removed.cad}`);
+    return { success: true, removed };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 // 从平台下载文件到本地 pdf 目录（数据PDF列表 -> 导入 -> 转换）；已下载过直接用缓存
 ipcMain.handle('platform-download-file', async (event, { fileId, fileName }) => {
   try {
@@ -863,7 +930,7 @@ ipcMain.handle('platform-download-file', async (event, { fileId, fileName }) => 
 });
 
 // 上传转换后的 CAD 并关联到原始 PDF（转换成功面板「保存」按钮）
-ipcMain.handle('platform-upload-file', async (event, { filePath, sourceFileId, folderId }) => {
+ipcMain.handle('platform-upload-file', async (event, { filePath, sourceFileId, folderId, overwrite }) => {
   try {
     if (!platformToken) return { success: false, error: '未登录平台' };
     if (!filePath || !fs.existsSync(filePath)) return { success: false, error: 'DXF 文件不存在' };
@@ -871,7 +938,8 @@ ipcMain.handle('platform-upload-file', async (event, { filePath, sourceFileId, f
     const form = new FormData();
     form.append('file', new Blob([fs.readFileSync(filePath)]), path.basename(filePath));
     form.append('folder_id', String(folderId || 4));
-    form.append('source_file_id', String(sourceFileId));
+    if (sourceFileId != null) form.append('source_file_id', String(sourceFileId)); // 关联的原始 PDF id（上传 CAD 时才带）
+    if (overwrite) form.append('overwrite', 'true'); // 同名覆盖：编辑后反复保存场景
 
     const res = await fetch(`${PLATFORM_BASE}/folder/file/upload`, {
       method: 'POST',

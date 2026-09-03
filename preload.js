@@ -71,15 +71,23 @@ contextBridge.exposeInMainWorld('api', {
   getCloudDownloads: () =>
     ipcRenderer.invoke('get-cloud-downloads'),
 
-  // 上传转换后的 CAD 并关联原 PDF（转换成功面板「保存」）
-  platformUploadFile: (filePath, sourceFileId, folderId) =>
-    ipcRenderer.invoke('platform-upload-file', { filePath, sourceFileId, folderId }),
+  // 上传转换后的 CAD 并关联原 PDF（转换成功面板「保存」）；overwrite=true 时同名覆盖
+  platformUploadFile: (filePath, sourceFileId, folderId, overwrite) =>
+    ipcRenderer.invoke('platform-upload-file', { filePath, sourceFileId, folderId, overwrite }),
+
+  // 删除云端文件（删 PDF 会级联删其下所有 CAD）
+  platformDeleteFiles: (fileIds) =>
+    ipcRenderer.invoke('platform-delete-files', fileIds),
 
   // CAD 转换结果本地缓存（图纸列表展开显示已转换的 CAD）
   recordCadCache: (keyId, dxfPath, name) =>
     ipcRenderer.invoke('record-cad-cache', { keyId, dxfPath, name }),
   getCadCache: () =>
     ipcRenderer.invoke('get-cad-cache'),
+
+  // 清除某个云端 PDF 的本地缓存（PDF + 转换出的 CAD）
+  clearFileCache: (fileId) =>
+    ipcRenderer.invoke('clear-file-cache', fileId),
 
   // 用系统默认程序打开文件
   openPathExternal: (filePath) =>
