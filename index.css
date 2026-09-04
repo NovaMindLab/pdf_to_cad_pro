@@ -348,7 +348,8 @@ body {
 }
 
 .modal-container.modal-large {
-  width: 800px;
+  width: 860px;
+  max-width: 90vw;
 }
 
 @keyframes modal-pop {
@@ -1087,9 +1088,9 @@ body {
 
 .history-table th.col-expand { width: 28px; }
 .history-table th.col-filename { width: auto; }
+.history-table th.col-time { width: 100px; }
 .history-table th.col-status { width: 80px; }
-.history-table th.col-time { width: 140px; }
-.history-table th.col-actions { width: 120px; text-align: right; }
+.history-table th.col-actions { width: 275px; text-align: right; }
 
 /* 表格行 — 独立卡片风格 */
 .history-table tbody tr {
@@ -1264,12 +1265,53 @@ body {
   filter: none;
 }
 
+/* 重新转换按钮：在已转换 CAD 旁提供直接重新从原 PDF 转换的入口 */
+.history-table .btn-reconvert {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  padding: 5px 10px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: #00f2fe;
+  background: rgba(0, 242, 254, 0.08);
+  border: 1px solid rgba(0, 242, 254, 0.35);
+  border-radius: 20px;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: all 0.18s ease;
+}
+
+.history-table .btn-reconvert svg {
+  width: 12px;
+  height: 12px;
+}
+
+.history-table .btn-reconvert:hover:not(:disabled) {
+  color: #fff;
+  background: linear-gradient(135deg, rgba(0, 242, 254, 0.8), rgba(79, 172, 254, 0.8));
+  border-color: #00f2fe;
+  box-shadow: 0 2px 10px rgba(0, 242, 254, 0.35);
+  transform: translateY(-1px);
+}
+
+.history-table .btn-reconvert:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.history-table .btn-reconvert:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
 /* 清除缓存按钮：幽灵样式小按钮，紧跟在导入/打开按钮后面 */
 .history-table .btn-clear-cache {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  margin-left: 8px;
+  margin-left: 6px;
   padding: 5px 10px;
   font-family: inherit;
   font-size: 12px;

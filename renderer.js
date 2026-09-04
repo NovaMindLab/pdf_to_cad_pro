@@ -832,6 +832,7 @@ function updateLayerControlUI(entities) {
 // DOM Elements
 const btnOpenImport = document.getElementById('btn-open-import');
 const btnOpenHistory = document.getElementById('btn-open-history');
+const btnReconvertCurrent = document.getElementById('btn-reconvert-current');
 const convertModal = document.getElementById('convert-modal');
 const historyModal = document.getElementById('history-modal');
 const subgraphsModal = document.getElementById('subgraphs-modal');
@@ -929,6 +930,7 @@ let currentViewMode = 'split';   // 'split' or 'single'
 let currentActiveTab = 'dxf';    // 'pdf' or 'dxf'
 let currentPdfHash = '';         // Hash of current original PDF
 let currentCloudSourceId = null; // 云端导入的平台文件 id（转换后「保存」关联用；本地导入为 null）
+let currentCloudFile = null;     // 当前云端文件完整元数据对象（重新转换或状态保留）
 
 // Helper to replace extension
 function getDxfPath(pdfPath) {
@@ -955,6 +957,7 @@ function resetModalUI() {
   selectedInputPath = '';
   selectedOutputPath = '';
   currentCloudSourceId = null;
+  currentCloudFile = null;
 
   if (modalUploadZone) modalUploadZone.classList.remove('hidden');
   configPanel.classList.add('hidden');
@@ -990,6 +993,24 @@ btnOpenHistory.addEventListener('click', () => {
 btnCloseHistoryModal.addEventListener('click', () => {
   historyModal.classList.add('hidden');
 });
+
+if (btnReconvertCurrent) {
+  btnReconvertCurrent.addEventListener('click', () => {
+    if (currentCloudFile) {
+      handleCloudImport(currentCloudFile, btnReconvertCurrent);
+    } else if (currentCloudSourceId) {
+      const fileName = (selectedInputPath ? selectedInputPath.split(/[\\/]/).pop() : 'drawing.pdf');
+      handleCloudImport({ id: currentCloudSourceId, file_name: fileName }, btnReconvertCurrent);
+    } else if (selectedInputPath) {
+      resetModalUI();
+      displayFileConfig(selectedInputPath);
+      convertModal.classList.remove('hidden');
+    } else {
+      historyModal.classList.remove('hidden');
+      loadHistory();
+    }
+  });
+}
 
 if (btnOpenSubgraphs) {
   btnOpenSubgraphs.addEventListener('click', () => {
@@ -1253,8 +1274,8 @@ async function loadHistory() {
       importBtn = document.createElement('button');
       importBtn.className = 'btn-import-cloud' + (cachedEntry || latestCad ? ' is-cached' : '');
 
-      if (cachedEntry && latestCad) {
-        // PDF 已下载且 CAD 已转换/保存：应用内直接打开 CAD（单视图渲染）
+      if (latestCad) {
+        // CAD 已转换过：主按钮为「打开 CAD」（直接单视图渲染缓存的 CAD）
         importBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span>打开 CAD</span>';
         importBtn.title = `CAD 已转换过，点击在编辑器中打开：${latestCad.path}`;
         importBtn.addEventListener('click', async (e) => {
@@ -1262,6 +1283,7 @@ async function loadHistory() {
           console.log('[Debug-OpenCAD] 点击打开 CAD:', latestCad.path);
           historyModal.classList.add('hidden');
           currentCloudSourceId = file.id; // 标记来源：编辑后可「保存到云端」
+          currentCloudFile = file;
           const ok = await loadDxfOnly(latestCad.path);
           if (!ok) {
             // 打开失败 → 回退：用本地缓存的 PDF 走转换流程
@@ -1269,24 +1291,43 @@ async function loadHistory() {
             handleCloudImport(file, importBtn);
           }
         });
+        actionsTd.appendChild(importBtn);
+
+        // 重新转换按钮：提供跳过 CAD 缓存、重新从原 PDF 执行转换的入口
+        const reconvertBtn = document.createElement('button');
+        reconvertBtn.className = 'btn-reconvert';
+        reconvertBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg><span>重新转换</span>';
+        reconvertBtn.title = '重新载入原始 PDF 进行转换配置与重新转换';
+        reconvertBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          currentCloudSourceId = file.id;
+          currentCloudFile = file;
+          handleCloudImport(file, reconvertBtn);
+        });
+        actionsTd.appendChild(reconvertBtn);
       } else if (cachedEntry) {
         // PDF 已下载但还没转换过：用本地缓存直接进转换
         importBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span>打开缓存</span>';
         importBtn.title = '已下载过，直接使用本地缓存';
         importBtn.addEventListener('click', (e) => {
           e.stopPropagation();
+          currentCloudSourceId = file.id;
+          currentCloudFile = file;
           handleCloudImport(file, importBtn);
         });
+        actionsTd.appendChild(importBtn);
       } else {
         // 未下载过：从平台下载并导入转换
         importBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>导入</span>';
         importBtn.title = '下载并导入转换';
         importBtn.addEventListener('click', (e) => {
           e.stopPropagation();
+          currentCloudSourceId = file.id;
+          currentCloudFile = file;
           handleCloudImport(file, importBtn);
         });
+        actionsTd.appendChild(importBtn);
       }
-      actionsTd.appendChild(importBtn);
 
       // 清除缓存按钮：有 PDF 缓存或 CAD 转换缓存时显示
       if (cachedEntry || localCads.length > 0) {
@@ -1375,6 +1416,7 @@ async function loadHistory() {
           e.stopPropagation();
           historyModal.classList.add('hidden');
           currentCloudSourceId = file.id; // 标记来源：编辑后可「保存到云端」
+          currentCloudFile = file;
           loadDxfOnly(cad.path);
         });
         item.appendChild(openBtn);
@@ -1411,14 +1453,15 @@ async function handleCloudDelete(cadFile, btn) {
   }
 }
 
-// 云端 PDF「导入」：下载到本地 pdf 目录 -> 打开转换弹窗并预填路径
+// 云端 PDF「导入/重新转换」：下载到本地 pdf 目录 -> 打开转换弹窗并预填路径
 async function handleCloudImport(file, btn) {
-  const label = btn.querySelector('span');
+  if (!file) return;
+  const label = btn ? btn.querySelector('span') : null;
   const originalText = label ? label.textContent : '';
-  btn.disabled = true;
+  if (btn) btn.disabled = true;
   if (label) label.textContent = '下载中...';
   const res = await window.api.platformDownloadFile(file.id, file.file_name);
-  btn.disabled = false;
+  if (btn) btn.disabled = false;
   if (label) label.textContent = originalText;
 
   if (!res.success) {
@@ -1431,6 +1474,7 @@ async function handleCloudImport(file, btn) {
   resetModalUI();
   displayFileConfig(res.path);
   currentCloudSourceId = file.id; // 标记来源为云端文件，转换成功后可「保存」关联
+  currentCloudFile = file;        // 保存当前云端文件引用
   convertModal.classList.remove('hidden');
 }
 
@@ -3078,6 +3122,14 @@ function activateEditor(dxfFilePath) {
   if (btnSaveCloudEdit) {
     if (currentCloudSourceId != null) btnSaveCloudEdit.classList.remove('hidden');
     else btnSaveCloudEdit.classList.add('hidden');
+  }
+  // 顶部快捷重新转换按钮：当前有图纸来源时显示
+  if (btnReconvertCurrent) {
+    if (currentCloudFile || currentCloudSourceId || selectedInputPath) {
+      btnReconvertCurrent.classList.remove('hidden');
+    } else {
+      btnReconvertCurrent.classList.add('hidden');
+    }
   }
   updateExportButtonVisibility();
   if (propPanel)       propPanel.classList.add('hidden');

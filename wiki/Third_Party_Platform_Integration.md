@@ -254,7 +254,7 @@ GET /v1/folder/files?folder_id=4
 
 客户端实现位置：
 - IPC：`main.js` → `platform-list-folder-files`（带 token 请求，`code===0` 时返回 `{ success: true, data: [...] }`）；
-- 渲染：`renderer.js` → `loadHistory()`（两层渲染：PDF 主行 + `children` 缩进明细行，大小自动格式化 B/KB/MB）。
+- 渲染：`renderer.js` → `loadHistory()`（两层渲染：PDF 主行 + `children` 缩进明细行，已转换 CAD 图纸提供「打开 CAD」、「重新转换」与「清除缓存」三项操作）。
 
 ## 7. 验证脚本
 

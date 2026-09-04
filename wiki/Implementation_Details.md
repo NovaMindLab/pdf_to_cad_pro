@@ -468,6 +468,51 @@ graph LR
 
 应用启动时自动登录 3DCIM 运维平台（`http://xrdc.3ddcim.com/v1`）获取会话 Token，后续业务接口经主进程 Node.js `http` 统一代理并携带 `Cookie: xr3d_token`；工具栏「平台测试」按钮可一键验证登录与业务接口连通性。**完整架构、签名算法、踩坑记录与对接规范详见 [`Third_Party_Platform_Integration.md`](./Third_Party_Platform_Integration.md)。**
 
+### 10.4 图纸已转换 CAD 后的重新转换机制与入口设计
+
+#### 10.4.1 痛点背景
+在过去的版本中，当 PDF 图纸首次转换为 CAD 并生成本地缓存后，图纸列表中该行主操作按钮会自动变为 **「打开 CAD」**（直接通过 `loadDxfOnly` 渲染本地缓存的 `.dxf` 文件）。当转换引擎升级（如 `v1.0.5` 引入圆弧拟合、文字防重叠、TrueColor 等新特性）或用户需要修改转换参数时，用户无法直接对已转换图纸再次发起转换，必须繁琐地先执行「清除缓存」再重新下载转换。
+
+#### 10.4.2 双入口交互方案
+为了提供极致流畅的交互体验，系统新增了**图纸列表行内**与**顶部视口控制栏**的双重重新转换入口：
+
+```mermaid
+graph LR
+    subgraph 入口 A: 图纸列表
+        Row[图纸列表已转换行] --> Btn1["[重新转换] 按钮 (btn-reconvert)"]
+    end
+
+    subgraph 入口 B: 顶部预览控制栏
+        View[当前正在查看 CAD] --> Btn2["[重新转换] 快捷按钮 (#btn-reconvert-current)"]
+    end
+
+    Btn1 --> Import["handleCloudImport(file)"]
+    Btn2 --> Import
+
+    subgraph 转换管线
+        Import --> Check{"本地 PDF 缓存是否存在?"}
+        Check -->|是 1ms 直读| Modal[打开转换配置弹窗 convertModal]
+        Check -->|否 自动下载| Download[platformDownloadFile 下载原图] --> Modal
+        Modal --> Run[开始转换并应用最新转换算法]
+        Run --> SaveCache[更新本地 CAD 缓存索引]
+        SaveCache --> Render[立即渲染最新 DXF 图纸]
+    end
+```
+
+1. **图纸列表主操作区三键式布局**：
+   - 针对已有 CAD 转换记录的 PDF 图纸，主操作列并列展示三个功能清晰的胶囊按钮：
+     - `[打开 CAD]`（绿色胶囊，`.btn-import-cloud.is-cached`）：直接在应用内单视图极速渲染已生成的 CAD；
+     - `[重新转换]`（青蓝幽灵胶囊，`.btn-reconvert`）：载入原 PDF 并呼出转换弹窗，支持使用最新算法重新转换；
+     - `[清除缓存]`（红色幽灵胶囊，`.btn-clear-cache`）：安全清除本地已下载的 PDF 和转换出的 CAD 文件。
+2. **顶部视口控制栏动态快捷按钮**：
+   - 控制栏（`.preview-control-bar`）内置 `#btn-reconvert-current`。
+   - 当用户在编辑器中浏览任意已转换 CAD 时，系统通过 `activateEditor` 自动激活该按钮；用户无需退回图纸列表，点击即可立即以当前图纸的原 PDF 重新启动转换流程。
+3. **状态保留与云端互通**：
+   - 重新转换流程完整保留 `currentCloudSourceId` 与 `currentCloudFile` 状态标识，重新转换成功后不仅自动覆盖刷新本地缓存，还可无缝通过「保存到云端」功能一键同步回平台服务器。
+4. **UI 容积与防折行设计**：
+   - 弹窗宽度由 `800px` 升级至 `860px`（`max-width: 90vw`）；
+   - 表头 `th.col-actions` 宽度由 `120px` 拓宽至 `275px`，配合 `white-space: nowrap` 与 `gap: 6px`，确保中文字符与矢量图标在各种系统缩放下永不换行。
+
 ---
 
 ## 11. 本地开发与打包命令
