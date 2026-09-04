@@ -1,6 +1,6 @@
 {
   "name": "pdf-to-cad",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "High-precision vector PDF to DXF CAD converter",
   "main": "main.js",
   "scripts": {
