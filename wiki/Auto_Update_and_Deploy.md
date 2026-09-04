@@ -1,101 +1,102 @@
 # 应用内自动升级与一键发布 (Auto Update & Deploy)
 
-> 更新时间：2026-08-31
-> 相关文件：`main.js`（升级 IPC）、`preload.js`、`renderer.js`（设置页升级 UI）、`auto_deploy/deploy.js`（发布脚本）
+> 最新更新：2026-09-04 (v1.0.5)  
+> 相关核心文件：`main.js`（升级与差分热更 IPC）、`preload.js`、`renderer.js`（设置页升级与进度 UI）、`auto_deploy/deploy.js`（一键打包发布脚本）
 
-## 1. 总体流程
+---
+
+## 1. 总体流程与架构
 
 ```
-┌─────────────┐   npm run deploy    ┌──────────────────────┐
-│ 本机开发机   │ ──────────────────▶ │ Gitee Release 仓库    │
-│ deploy.js   │  构建 + 上传分卷     │ hqxluoyang/           │
-└─────────────┘                     │ pdf_to_cad_pro_update │
-                                    └──────────┬───────────┘
-                                               │ releases/latest API
-                                    ┌──────────▼───────────┐
-                                    │ 客户端（设置→检查更新）│
-                                    │ 比对版本→下载分卷→合并 │
-                                    │ →启动 NSIS 安装       │
-                                    └──────────────────────┘
+┌─────────────────┐    npm run deploy     ┌──────────────────────────────────┐
+│  本机开发环境   │ ────────────────────▶ │ GitHub Release 仓库 (v1.0.5+)     │
+│  deploy.js      │   构建 + 瘦身 +       │ NovaMindLab/pdf_to_cad_pro       │
+│  (gh CLI 流式)  │   打包差分补丁与安装包 │ ├─ update-patch-v1.0.5.zip (16MB)│
+└─────────────────┘                       │ └─ Setup 1.0.5.exe (134MB)       │
+                                          └─────────────────┬────────────────┘
+                                                            │ ghfast.top 国内 CDN 加速
+                                          ┌─────────────────▼────────────────┐
+                                          │ 客户端（设置 → 检查更新）        │
+                                          │ 比对版本 → 极速下载 16MB 差分包  │
+                                          │ → 解压热更替换 app.asar → 重启生效│
+                                          └──────────────────────────────────┘
 ```
 
-- 升级源：Gitee 公开仓库 [pdf_to_cad_pro_update](https://gitee.com/hqxluoyang/pdf_to_cad_pro_update)（安装包发布专用仓库）。
-- 客户端读 Release **不需要鉴权**；Gitee 私人令牌只在发布端使用，**严禁打包进客户端**。
+- **升级托管源**：GitHub 公开仓库 [NovaMindLab/pdf_to_cad_pro](https://github.com/NovaMindLab/pdf_to_cad_pro)
+- **国内高速分发**：支持挂载 `ghfast.top` 镜像加速，无需梯子即可实现 10~20 MB/s 满速下载。
+- **发布鉴权**：私人访问令牌（PAT）仅存于 `auto_deploy/deploy.config.json`（已被 `.gitignore` 排除，**严禁提交代码仓库**）。
 
-## 2. 客户端升级机制
+---
+
+## 2. 客户端升级与差分更新机制
 
 ### 2.1 检查更新（`main.js` → `check-for-update`）
+- 请求 `GET https://api.github.com/repos/NovaMindLab/pdf_to_cad_pro/releases/latest`；
+- 通过语义化版本比较算法（`isNewerVersion`），仅当远程版本严格高于本地 `app.getVersion()` 时提示更新；
+- **智能优先下载差分补丁**：
+  1. 优先匹配 `update-patch-v*.zip` 差分补丁包（仅包含业务代码 `app.asar` 与校验清单，体积从 189MB 骤减至 **16.3 MB**）；
+  2. 若不存在差分包，回退匹配完整安装包 `PDF to CAD Converter Setup *.exe`。
 
-- 请求 `GET https://gitee.com/api/v5/repos/hqxluoyang/pdf_to_cad_pro_update/releases/latest`；
-- 用 `tag_name`（如 `v1.0.3`）与 `app.getVersion()` 逐段比较（`isNewerVersion`），仅"严格更新"才提示；
-- 附件匹配规则（优先级从高到低）：
-  1. `*.gpartNN` 分卷文件（安装包超过 Gitee 100MB 限制时自动切分的产物），按文件名排序；
-  2. 单个 `.exe` 安装包（未分卷的小包）；
-- Gitee `releases/latest` 返回的 asset **没有 size 字段**，因此对每个附件发 `HEAD` 请求取 `Content-Length` 补全（下载进度条依赖它）。
+### 2.2 下载与带进度反馈（`download-update`）
+- 流式下载至系统临时目录，实时向渲染进程发送 `update-download-progress`（汇报已下载字节、总字节及 0-100 进度百分比）；
+- 前端显示流畅的青色动态进度条与即时速率指示。
 
-### 2.2 下载与合并（`download-update`）
+### 2.3 差分热更新安装（`install-update`）
+- **针对差分包 (`update-patch-v*.zip`)**：
+  1. 释放并解压补丁包；
+  2. 将新的 `app.asar` 覆盖更新至 `resources/app.asar`；
+  3. 调用 `app.relaunch()` 并立即退出重启，1~2 秒内即可完成无缝升级。
+- **针对完整安装包 (`.exe`)**：
+  - 调用 `shell.openPath(finalPath)` 调起 NSIS 独立安装器，随后退出当前应用。
 
-- 逐卷流式下载到系统临时目录，全程回报 `update-download-progress`（0-100，跨分卷累计）；
-- 下载完按序拼接分卷为完整 exe（每卷合并后立即删除），最终文件名去掉 `.gpartNN` 后缀；
-- `install-update`：Windows 上 `shell.openPath(finalPath)` 启动 NSIS 静默安装，成功后 `app.quit()`。
+---
 
-### 2.3 前端交互（设置页）
+## 3. 发布端工程化：`auto_deploy/deploy.js`
 
-- 「检查更新」按钮 → 状态文案（已是最新 / 发现新版本 / 未上传安装包）；
-- 「下载并安装」按钮 → 进度条（渐变青色）→ 100% 后自动拉起安装程序并退出应用。
+### 3.1 一键发布执行流水线 (`npm run deploy`)
 
-## 3. 发布端：`auto_deploy/deploy.js`
+| 序号 | 阶段 | 核心执行操作与优化 |
+| :---: | :--- | :--- |
+| **1** | **版本号管理** | 自动读取 `package.json`，按语义化格式推进 Patch / Minor / Major 版本；支持 `--no-bump` 指定同版本重构发布。 |
+| **2** | **排除重复打包** | `build.files` 中配置 `!converter/dist/**`，防止将 49MB 的 Python 可执行文件打入 `app.asar`，使 `app.asar` 从 **88MB 瘦身至 37.4MB**。 |
+| **3** | **Electron 打包** | 自动注入 `npmmirror` 国内镜像代理，执行 `electron-builder` 生成便携包与 NSIS 安装包。 |
+| **4** | **生成差分补丁** | 提取 `win-unpacked/resources/app.asar`，生成 `patch-manifest.json` 清单并打包为 `update-patch-v${version}.zip` (**16.3 MB**)。 |
+| **5** | **流式上传 Release** | 优先调用本机 `gh release upload ... --clobber` 进行流式断点上传，彻底解决 Node `fetch` 发送大文件时的 TCP 中断问题；失败自动降级到带重试的 REST API。 |
+| **6** | **CDN 校验验证** | 重新拉取 GitHub Release 详情并打印 CDN 加速直链，保障发布资产完好可用。 |
 
-### 3.1 执行流程（`npm run deploy`）
+### 3.2 配置文件说明
 
-| 步骤 | 说明 |
-|---|---|
-| 1. 版本号 +1 | `package.json` 的 `version` patch 自增（`--minor` / `--major` / `--no-bump` 可选），dry-run 也会写回 |
-| 2. Python 打包 | `npm run build-python`：PyInstaller onefile 打 `converter/converter.py` → `converter/dist/pdf-converter.exe`，并 `--exclude-module pandas scipy pyarrow matplotlib`（实际只需 pdfplumber + ezdxf + numpy，排除后 300MB → 49.8MB） |
-| 3. Electron 打包 | `npm run dist`：electron-builder NSIS 安装包输出到 `release/` |
-| 4. 分卷 | 单文件 > 90MB 自动切成 `Setup x.x.x.exe.gpart01/02...`（Gitee Release 单附件上限 100MB） |
-| 5. 上传 | 先删 Release 里同名旧附件再传（支持重复发布），失败自动重试 3 次；Release 不存在则自动创建（tag = `v版本号`，标题 `v版本号 - PDF to CAD Converter`） |
-| 6. 校验 | 重新拉 `releases/latest`，确认客户端视角能看到新版本 |
-
-### 3.2 配置
-
-`auto_deploy/deploy.config.json`（已被 .gitignore 排除，**不得提交**）：
-
+`auto_deploy/deploy.config.json`：
 ```json
 {
-  "token": "<Gitee 私人令牌，需 projects 权限>",
-  "owner": "hqxluoyang",
-  "repo": "pdf_to_cad_pro_update"
+  "access_token": "ghp_xxxxxxxxxxxxxxxxxxxx",
+  "owner": "NovaMindLab",
+  "repo": "pdf_to_cad_pro"
 }
 ```
 
-### 3.3 标准发布命令
+### 3.3 常用发布命令
 
 ```powershell
+# 1. 常规发布：版本号自动 +0.0.1 并构建上传
 npm run deploy
+
+# 2. 覆盖发布：不改动版本号，重新构建当前版本产物并覆盖 Release 资产
+node auto_deploy/deploy.js --no-bump
+
+# 3. 演练模式：仅执行版本号计算与安装包查找，不上传不构建
+node auto_deploy/deploy.js --dry-run
 ```
 
-镜像已内置在 `deploy.js` 中（构建前自动设置 `ELECTRON_MIRROR` / `ELECTRON_BUILDER_BINARIES_MIRROR` 为 npmmirror，外部已设置的值不会被覆盖）。
+---
 
-这两个镜像是**国内网络必需**的：GitHub 直连下载 Electron 运行时（111MB）和 winCodeSign 会长时间卡死，npmmirror 镜像约 1-2 分钟完成。
+## 4. 关键踩坑记录与解决方案 (Best Practices)
 
-### 3.4 常用参数
-
-```powershell
-node auto_deploy/deploy.js --dry-run     # 全流程演练：不构建、不上传（会写版本号，跑完记得改回）
-node auto_deploy/deploy.js --no-bump     # 不改版本号，重建并覆盖发布当前版本
-node auto_deploy/deploy.js --minor       # 次版本号升级
-```
-
-## 4. 实测记录
-
-- 2026-08-31：v1.0.2 发布成功，安装包 179.3MB 分为 2 卷（90MB + 89.3MB）上传；旧版客户端「检查更新 → 下载 → 合并 → 启动安装」链路全部打通。
-
-## 5. 踩坑记录（重要）
-
-1. **Gitee Release 单附件上限 100MB**：超限上传会直接失败（表现为 fetch 中断）。方案：发布端切 90MB 分卷、客户端下载后合并。分卷命名 `.gpartNN`，客户端靠正则 `/\.gpart\d+$/i` 识别并按名排序。
-2. **不要把 pandas/scipy/pyarrow 打进 Python 包**：PyInstaller 全量依赖会膨胀到 300MB+；`converter.py` 实际依赖只有 pdfplumber、ezdxf、numpy（ezdxf 加速模块依赖 numpy，**不能排除**，否则运行报 `cydist` 错）。
-3. **`releases/latest` 无 size 字段**：进度条会失效，必须 HEAD 补全。
-4. **重复发布**：deploy.js 上传前会删除同名旧附件，所以同一 tag 可反复发布；`--no-bump` 用于只修构建产物的场景。
-5. **国内网络**：GitHub 直连必卡，务必带 §3.3 的两个镜像变量。
-6. **令牌安全**：token 只放 `deploy.config.json`（已 gitignore）；曾在聊天中泄露过的旧令牌应立即在 Gitee 后台吊销重建。
+1. **Python 二进制双重重复嵌套打包陷阱**：
+   - *问题*：若 `package.json` 中的 `files` 字段为 `["**/*"]`，electron-builder 会把 `converter/dist/pdf-converter.exe` 也压缩进 `app.asar`，而 `extraResources` 又在外部拷贝了一份，导致 `app.asar` 膨胀到 88MB、安装包膨胀到 189MB。
+   - *解决*：在 `build.files` 中显式排除 `!converter/dist/**`，同时在 `main.js` 中做好外部 sidecar 路径探测兼容。
+2. **大文件直传 GitHub 失败 (`fetch failed`)**：
+   - *问题*：国内网络直接向 `uploads.github.com` 发送超过 100MB 内存 Buffer 的 HTTP POST 请求时，极易因网络抖动出现断流。
+   - *解决*：升级 `deploy.js`，无缝联动系统内置的 `gh.exe`（GitHub CLI），利用其底层的 Go 流式分块传输与断点续传机制，100% 保证大文件上传成功。
+3. **依赖排除瘦身**：
+   - PyInstaller 打包 Python 时务必携带 `--exclude-module pandas scipy pyarrow matplotlib`，确保 Python 侧产物由 300MB+ 精简至 49MB。

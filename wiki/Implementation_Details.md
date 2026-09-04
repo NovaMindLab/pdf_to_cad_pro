@@ -84,6 +84,49 @@ else:
 - **智能中文字符紧凑合并**：为防止中文字符串在渲染时产生过宽或水平溢出问题，合并算法集成了 Unicode 范围检测（`is_chinese_char`）。在合并 baseline 的字图元时，如果检测到汉字或字符间距极其紧凑（小于字符高度的 15%），直接使用无空字符串（`""`）连接合并；对普通英文/数字保留正常的单词空格连接（`" "`）。
 - **High-DPI 设备像素比（DPR）适配**：根据 `window.devicePixelRatio` 动态调整 Canvas 与 WebGL RenderTarget 分辨率，使高分屏上的文字与线元边缘绝对锐利。
 
+### 2.4 原生圆与圆弧拟合识别算法 (Native Circle & Arc Recognition)
+- **问题背景**：PDF 绘图指令基于三次贝塞尔曲线（Cubic Bézier）。传统工具在转换时将其粗暴打散为上百段细碎多段线（`LWPOLYLINE`），不仅造成严重的锯齿状瑕疵，还使 DXF 实体数量膨胀数十倍，用户在 CAD 中无法捕捉圆心或修改半径。
+- **解决方案**：引入基于最小二乘几何拟合与半径标准差校验的判定算法：
+  ```python
+  def fit_circle(pts):
+      # pts: 离散曲线采样点集 [(x0, y0), (x1, y1), ...]
+      # 构建超定线性方程组: (x - cx)^2 + (y - cy)^2 = R^2
+      # 解正规方程计算最佳圆心 (cx, cy) 与理论半径 R
+      # 校验半径标准差: 若 sigma_R / R < 0.08，则严格判定为几何圆
+      ...
+  ```
+- **闭合与开弧识别**：
+  - 首尾点欧氏距离 $< 3$ 且圆心角覆盖完整判定为原生 `msp.add_circle((cx, cy), radius=R)`；
+  - 开放圆弧利用起点与终点相对于圆心的反正切角计算起始角与终止角，输出原生 `msp.add_arc((cx, cy), radius=R, start_angle, end_angle)`；
+- **优化效果**：在变电站高压一次接线图测试中，成功提取出 **50 个 AutoCAD 原生标准圆**，拓扑点数量从数千缩减至单一实体，消除了多段线渲染锯齿。
+
+### 2.5 24位 TrueColor 与 AutoCAD ACI 双轨色彩体系 (Color Fidelity & Layers)
+- **色彩解析**：解析 PDF 路径与文字的 `stroking_color` / `non_stroking_color`，将其归一化并计算 24-bit TrueColor 整型：
+  $$\text{TrueColor} = (R \ll 16) \mid (G \ll 8) \mid B$$
+- **标准 ACI 颜色索引映射**：建立 AutoCAD 标准 256 色前 9 色查找表，将 RGB 向量在欧氏距离空间匹配最佳 ACI 编号，通过组码 `62` 写入 ACI 索引，组码 `420` 写入 TrueColor，确保在从 AutoCAD R14 至 AutoCAD 2026 全版本中无色差呈现。
+- **标准化语义图层结构**：
+  - `CIRCLES`：原生圆图层（#38BDF8 天蓝色）
+  - `ARCS`：原生圆弧图层（#A855F7 紫色）
+  - `LINES`：直线轮廓图层（#F3F4F6 白灰色）
+  - `RECTS`：设备外框与表格层（#D1D5DB 浅灰色）
+  - `POLYLINES`：复合多段线层（#00F2FE 青色）
+  - `TEXTS`：说明与参数文字层（#10B981 翡翠绿）
+  - `SYMBOLS`：聚类电气符号层（#F59E0B 琥珀黄）
+
+### 2.6 文字排版重叠根除与真实角度倾斜旋转 (True-Angle Text Rotation)
+- **文字重叠彻底根除**：重构 `group_rotated_chars_into_words`，以每个字符的变换矩阵为基准计算主方向向量。只有共线且沿法向间距小于阈值的字符才归入同组，彻底杜绝了表格密集文字与跨行文本错误揉杂在一起导致的字迹挤压重叠。
+- **PDF 到 CAD 角度转换矩阵**：
+  - PDF 坐标系 Y 轴向下，旋转矩阵逆时针计算角为 $\theta_{\text{PDF}}$；
+  - CAD DXF 组码 `50` 坐标系 Y 轴向上，逆时针旋转角为 $\theta_{\text{CAD}}$；
+  - 核心换算关系：
+    $$\theta_{\text{CAD}} = (-\theta_{\text{PDF}}) \pmod{360}$$
+  - 实测精准提取斜角排版文字（如线缆沿线标注 `YJV22-3*240`），在 CAD 中完美沿导线倾斜对齐。
+
+### 2.7 光栅扫描件智能识别与拦截机制 (Raster PDF Detection)
+- 遍历 PDF 页面所有矢量元素（`lines`, `curves`, `rects`）及文字；
+- 若矢量与文字数量接近为 0，而图片对象面积占比 $> 80\%$，系统判定为纯扫描位图文件；
+- 提前弹出友好提示，告知用户当前文档为扫描件，引导用户使用原版矢量 PDF 转换，防止无谓生成空白或仅含外框的劣质 DXF。
+
 ---
 
 ## 3. Three.js WebGL CAD 视口引擎 (`ThreeCadEngine`)
@@ -98,10 +141,11 @@ graph LR
         Scene --> TextGroup[textGroup: 文字纹理网格]
         Scene --> OverlayGroup[overlayGroup: 交互高亮与手柄]
         DxfGroup --> LineBatches[LineSegments 图层合批]
-        TextGroup --> TextMeshes[Mesh + CanvasTexture]
+        DxfGroup --> CircleBatches[Circle/Arc 线段解析合批]
+        TextGroup --> TextMeshes[Mesh + CanvasTexture + 局部旋转]
         OverlayGroup --> HoverLine[悬停线]
         OverlayGroup --> SelectedLine[选中线/框]
-        OverlayGroup --> GripPoints[顶点控制手柄]
+        OverlayGroup --> GripPoints[顶点与圆心控制手柄]
     end
 ```
 
@@ -113,19 +157,31 @@ this.camera.position.set(camX, camY, 500);
 this.camera.lookAt(camX, camY, 0);
 ```
 
-### 3.2 静态图元图层合批 (Batching)
-- 遍历 DXF 实体（LINE、LWPOLYLINE），按图层和颜色聚类为顶点数组；
-- 每个图层仅创建唯一的 `THREE.BufferGeometry` + `THREE.LineSegments`，将原本数万次 Draw Call 骤降至个位数，大幅降低 GPU 驱动开销。
+### 3.2 静态图元图层合批与原生圆/弧光栅化 (Batching & Tessellation)
+- 遍历 DXF 实体（LINE、LWPOLYLINE、CIRCLE、ARC），按图层和颜色聚类为顶点数组；
+- 对 `CIRCLE` 实体以高密度平滑细分（16~64 步长），对 `ARC` 实体按起止弧度区间线性细分；
+- 每个图层与颜色通道创建唯一的 `THREE.BufferGeometry` + `THREE.LineSegments`，将数十万次 Draw Call 骤降至个位数，大幅降低 GPU 驱动开销。
 
-### 3.3 高清文字纹理池与内存缓存 (`_textureCache`)
+### 3.3 高清文字纹理池与旋转矩阵 (`_textureCache`)
 - 文字以 `THREE.Mesh`（PlaneGeometry）+ 离屏 Canvas 生成的高清抗锯齿纹理呈现；
-- 引入 `_textureCache` Map 缓存池（以 `text_height_color` 为 Key），在图元拖动或重绘时复用已生成的 `THREE.CanvasTexture`，避免频繁创建 DOM Canvas 造成垃圾回收（GC）掉帧。
+- 引入 `_textureCache` Map 缓存池（以 `text_height_color` 为 Key），在图元拖动或重绘时复用已生成的 `THREE.CanvasTexture`，避免频繁创建 DOM Canvas 造成垃圾回收（GC）掉帧；
+- 依据实体组码 `50` 旋转角度设置 `mesh.rotation.z = (rotation * Math.PI) / 180`，利用局部旋转中心矩阵偏移实现带角度文本在 3D 空间的逼真排布。
 
 ### 3.4 动态交互层 (`overlayGroup`)
 交互高亮独立于静态场景：
-- **`hoverLine`**：当前悬停图元黄色/亮蓝色轮廓（`z = 10`）；
+- **`hoverLine`**：当前悬停图元黄色/亮蓝色轮廓（`z = 10`），对圆与圆弧动态生成光栅化高亮线段；
 - **`selectedLine`**：选中图元/GROUP 的金黄色边框与整体外框（`z = 10`）；
-- **`gripPoints`**：顶点控制手柄（`THREE.Points`），方便进行节点级拉伸编辑。
+- **`gripPoints`**：顶点与圆心控制手柄（`THREE.Points`），对圆展示圆心与四极控制点，方便进行节点级拉伸编辑。
+
+### 3.5 浮动图层控制面板 (`#layer-control-panel`)
+- **UI 布局**：在 CAD 视口右上角叠加一层半透明毛玻璃面板，内置折叠/展开控制器与当前图层总数 Badge；
+- **图层列表与实体统计**：加载 DXF 时自动扫描所有图元所属图层并统计实体数量，按字母序渲染图层项目、对应颜色色块（Color Chip）及多选复选框；
+- **毫秒级显隐控制**：复选框触发 `threeCadEngine.setLayerVisibility(layer, isVisible)`，直接切换对应图层 LineSegments 与 TextGroup 成员的 `visible` 属性并重绘，无任何 DOM 重新生成或文件重新解析开销。
+
+### 3.6 空间哈希网格拾取与吸附扩展
+- `SpatialGrid` 在计算实体包围盒时适配了 CIRCLE（$[cx - R, cx + R, cy - R, cy + R]$）、ARC 与旋转 TEXT 的旋转矩形外包络；
+- `hitTest` 支持点到圆周距离公式：$|d - R| < \text{threshold}$，以及开弧夹角闭区间检测；
+- `hitTestNode` 自动识别圆心与弧线端点作为关键捕捉特征点。
 
 ---
 
