@@ -994,6 +994,60 @@ btnCloseHistoryModal.addEventListener('click', () => {
   historyModal.classList.add('hidden');
 });
 
+// 中央工作区 Hero 操作按钮绑定
+const btnHeroOpenHistory = document.getElementById('btn-hero-open-history');
+if (btnHeroOpenHistory) {
+  btnHeroOpenHistory.addEventListener('click', () => {
+    loadHistory();
+    historyModal.classList.remove('hidden');
+  });
+}
+
+const btnHeroSelectFile = document.getElementById('btn-hero-select-file');
+if (btnHeroSelectFile) {
+  btnHeroSelectFile.addEventListener('click', async () => {
+    const filePath = await window.api.selectInputPath();
+    if (filePath) {
+      resetModalUI();
+      displayFileConfig(filePath);
+      convertModal.classList.remove('hidden');
+    }
+  });
+}
+
+// 拖拽 PDF 图纸到中央工作区直接打开导入配置
+const dragDropZone = document.getElementById('drag-drop-zone') || document.getElementById('preview-placeholder');
+if (dragDropZone) {
+  ['dragenter', 'dragover'].forEach(name => {
+    dragDropZone.addEventListener(name, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragDropZone.classList.add('dragover');
+    });
+  });
+  ['dragleave', 'drop'].forEach(name => {
+    dragDropZone.addEventListener(name, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragDropZone.classList.remove('dragover');
+    });
+  });
+  dragDropZone.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (files && files.length > 0) {
+      const file = files[0];
+      const p = file.path || '';
+      if (p && p.toLowerCase().endsWith('.pdf')) {
+        resetModalUI();
+        displayFileConfig(p);
+        convertModal.classList.remove('hidden');
+      }
+    }
+  });
+}
+
 if (btnReconvertCurrent) {
   btnReconvertCurrent.addEventListener('click', () => {
     if (currentCloudFile) {
@@ -1190,39 +1244,31 @@ function formatCloudFileSize(n) {
 }
 
 // 历史记录面板数据源：平台云端文件列表（两层结构：原始 PDF -> children CAD）
-async function loadHistory() {
+let allHistoryFiles = [];
+let allHistoryCacheMap = {};
+let allHistoryCadCache = {};
+let allHistoryUser = '';
+
+function renderHistoryTable(filesToRender) {
   if (!historyList) return;
-  historyList.innerHTML = '<tr><td colspan="5"><div class="empty-history">正在加载图纸列表...</div></td></tr>';
-  let files = [];
-  let listUser = '';
-  let cacheMap = {};
-  let cadCache = {};
-  try {
-    const res = await window.api.platformListFolderFiles();
-    if (!res.success) throw new Error(res.error || '接口调用失败');
-    files = res.data || [];
-    listUser = res.user || '';
-    [cacheMap, cadCache] = await Promise.all([
-      window.api.getCloudDownloads() || {},
-      window.api.getCadCache() || {},
-    ]);
-  } catch (error) {
-    historyList.innerHTML = `<tr><td colspan="5"><div class="empty-history" style="color:#ef4444;">加载失败：${error.message}</div></td></tr>`;
-    return;
-  }
-
   historyList.innerHTML = '';
-  if (!files.length) {
-    historyList.innerHTML = `<tr><td colspan="5"><div class="empty-history">账号「${listUser || '当前用户'}」在云端 Folder 4 下暂无文件</div></td></tr>`;
+
+  const badge = document.getElementById('history-count-badge');
+  if (badge) {
+    badge.textContent = `${filesToRender.length} 份图纸`;
+  }
+
+  if (!filesToRender.length) {
+    historyList.innerHTML = `<tr><td colspan="5"><div class="empty-history">${allHistoryFiles.length === 0 ? `账号「${allHistoryUser || '当前用户'}」在云端暂无图纸` : '未找到匹配的图纸'}</div></td></tr>`;
     return;
   }
 
-  files.forEach(file => {
+  filesToRender.forEach(file => {
     const isSource = file.source_file_id === null || file.source_file_id === undefined;
     const platformChildren = (isSource && (file.child_count || 0) > 0 && Array.isArray(file.children)) ? file.children : [];
-    const localCads = (isSource && cadCache[String(file.id)]) || [];
+    const localCads = (isSource && allHistoryCadCache[String(file.id)]) || [];
     const hasChildren = platformChildren.length > 0 || localCads.length > 0;
-    const cachedEntry = isSource && cacheMap[String(file.id)];
+    const cachedEntry = isSource && allHistoryCacheMap[String(file.id)];
     let toggleChildren = null;
 
     const tr = document.createElement('tr');
@@ -1357,7 +1403,7 @@ async function loadHistory() {
     // --- 主行点击：有 CAD 子文件则展开；没有则直接导入/打开缓存 PDF 去转换 ---
     tr.style.cursor = 'pointer';
     tr.addEventListener('click', (e) => {
-      if (e.target.closest('button')) return; // 按钮有自己的处理
+      if (e.target.closest('button')) return;
       if (toggleChildren) {
         toggleChildren();
       } else if (isSource) {
@@ -1373,7 +1419,7 @@ async function loadHistory() {
       childRow.className = 'cloud-children-row';
       childRow.style.display = 'none';
       const childTd = document.createElement('td');
-      childTd.colSpan = 4;
+      childTd.colSpan = 5;
 
       const inner = document.createElement('div');
       inner.className = 'subgraphs-inner';
@@ -1432,6 +1478,67 @@ async function loadHistory() {
         expandBtn.classList.toggle('expanded');
       };
     }
+  });
+}
+
+async function loadHistory() {
+  if (!historyList) return;
+  historyList.innerHTML = '<tr><td colspan="5"><div class="empty-history">正在加载图纸列表...</div></td></tr>';
+  allHistoryFiles = [];
+  try {
+    const res = await window.api.platformListFolderFiles();
+    if (!res.success) throw new Error(res.error || '接口调用失败');
+    allHistoryFiles = res.data || [];
+    allHistoryUser = res.user || '';
+    [allHistoryCacheMap, allHistoryCadCache] = await Promise.all([
+      window.api.getCloudDownloads() || {},
+      window.api.getCadCache() || {},
+    ]);
+  } catch (error) {
+    historyList.innerHTML = `<tr><td colspan="5"><div class="empty-history" style="color:#ef4444;">加载失败：${error.message}</div></td></tr>`;
+    return;
+  }
+
+  const searchInput = document.getElementById('history-search-input');
+  const kw = searchInput ? searchInput.value.trim().toLowerCase() : '';
+  if (!kw) {
+    renderHistoryTable(allHistoryFiles);
+  } else {
+    const filtered = allHistoryFiles.filter(f => {
+      const nameMatch = (f.file_name || '').toLowerCase().includes(kw);
+      const children = Array.isArray(f.children) ? f.children : [];
+      const childMatch = children.some(c => (c.file_name || '').toLowerCase().includes(kw));
+      return nameMatch || childMatch;
+    });
+    renderHistoryTable(filtered);
+  }
+}
+
+// 绑定搜索过滤与刷新按钮
+const historySearchInput = document.getElementById('history-search-input');
+if (historySearchInput) {
+  historySearchInput.addEventListener('input', () => {
+    const kw = historySearchInput.value.trim().toLowerCase();
+    if (!kw) {
+      renderHistoryTable(allHistoryFiles);
+    } else {
+      const filtered = allHistoryFiles.filter(f => {
+        const nameMatch = (f.file_name || '').toLowerCase().includes(kw);
+        const children = Array.isArray(f.children) ? f.children : [];
+        const childMatch = children.some(c => (c.file_name || '').toLowerCase().includes(kw));
+        return nameMatch || childMatch;
+      });
+      renderHistoryTable(filtered);
+    }
+  });
+}
+
+const btnRefreshHistory = document.getElementById('btn-refresh-history');
+if (btnRefreshHistory) {
+  btnRefreshHistory.addEventListener('click', async () => {
+    btnRefreshHistory.classList.add('loading');
+    await loadHistory();
+    btnRefreshHistory.classList.remove('loading');
   });
 }
 
@@ -2861,18 +2968,26 @@ const btnZoomIn = document.getElementById('btn-zoom-in');
 const btnZoomOut = document.getElementById('btn-zoom-out');
 const btnFitViewport = document.getElementById('btn-fit-viewport');
 
+const zoomValueEl = document.getElementById('zoom-value');
+
 function updateZoomSlider() {
+  const val = Math.round(zoom * 100);
   if (zoomSlider) {
-    const val = Math.round(zoom * 100);
     if (zoomSlider.value !== String(val)) {
       zoomSlider.value = val;
     }
+  }
+  if (zoomValueEl) {
+    zoomValueEl.textContent = `${val}%`;
   }
 }
 
 if (zoomSlider) {
   zoomSlider.addEventListener('input', () => {
     const val = parseFloat(zoomSlider.value);
+    if (zoomValueEl) {
+      zoomValueEl.textContent = `${Math.round(val)}%`;
+    }
     const newZoom = Math.max(0.01, Math.min(1000, val / 100));
 
     const canvas = dxfCanvas || pdfCanvas;
@@ -5501,15 +5616,23 @@ const settingsVersionText = document.querySelector('.settings-version');
 const btnLogout = document.getElementById('btn-logout');
 const settingsUsername = document.getElementById('settings-username');
 
-// 设置页显示当前真实应用版本与登录用户
+// 设置页与顶栏显示当前真实应用版本与登录用户
 (async () => {
-  if (settingsVersionText && window.api.getAppVersion) {
+  if (window.api.getAppVersion) {
     const ver = await window.api.getAppVersion();
-    if (ver) settingsVersionText.textContent = `当前版本 v${ver}`;
+    if (ver) {
+      if (settingsVersionText) settingsVersionText.textContent = `当前版本 v${ver}`;
+      const titlebarVer = document.getElementById('titlebar-version-badge');
+      if (titlebarVer) titlebarVer.textContent = `v${ver}`;
+    }
   }
-  if (settingsUsername && window.api.getLoginUser) {
+  if (window.api.getLoginUser) {
     const username = await window.api.getLoginUser();
-    settingsUsername.textContent = username || '未登录';
+    if (settingsUsername) settingsUsername.textContent = username || '未登录';
+    const titlebarUser = document.getElementById('titlebar-username-text');
+    if (titlebarUser && username) {
+      titlebarUser.textContent = username;
+    }
   }
 })();
 

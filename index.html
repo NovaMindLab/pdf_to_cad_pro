@@ -14,29 +14,52 @@
 <body>
   <!-- Window Drag Area for Premium Custom Title Bar -->
   <div class="window-titlebar">
-    <div class="titlebar-logo">
-      <img src="assets/logo.png" alt="Logo" class="app-logo-icon" width="22" height="22" style="border-radius: 5px; object-fit: cover; box-shadow: 0 0 10px rgba(0, 242, 254, 0.35); flex-shrink: 0;">
-      <span>PDF-to-CAD Studio</span>
+    <div class="titlebar-left">
+      <div class="titlebar-logo">
+        <img src="assets/logo.png" alt="Logo" class="app-logo-icon" width="22" height="22">
+        <span class="app-title">PDF to CAD Studio</span>
+        <span class="titlebar-badge" id="titlebar-version-badge">v1.0.5</span>
+      </div>
     </div>
     <!-- 顶部导航：编辑 / 设置 -->
     <nav class="titlebar-nav">
-      <button class="nav-tab active" id="nav-tab-editor">编辑</button>
-      <button class="nav-tab" id="nav-tab-settings">设置</button>
+      <div class="nav-segmented">
+        <button class="nav-tab active" id="nav-tab-editor">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 20h9"></path>
+            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+          </svg>
+          <span>图纸编辑</span>
+        </button>
+        <button class="nav-tab" id="nav-tab-settings">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+          <span>系统设置</span>
+        </button>
+      </div>
     </nav>
+    <div class="titlebar-right">
+      <div class="titlebar-status-pill" id="titlebar-user-status" title="平台协同状态">
+        <span class="status-indicator-dot"></span>
+        <span id="titlebar-username-text">云端在线</span>
+      </div>
+    </div>
   </div>
 
   <div class="dashboard-container">
-    <!-- 界面已移除 sidebar，全屏给到绘图区域 -->
-
     <!-- 云端转换成功后的「保存到云端」浮动条 -->
     <div class="cloud-save-toast hidden" id="cloud-save-toast">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-      <span class="cloud-toast-text">转换成功，CAD 已缓存到本地。可保存到云端与原始图纸关联。</span>
+      <div class="cloud-toast-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 16.58A5 5 0 0 0 18 7h-1.26A8 8 0 1 0 4 15.25"/><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/></svg>
+      </div>
+      <span class="cloud-toast-text">转换成功，CAD 已在本地生成。是否将此图纸保存至云端？</span>
       <button class="cloud-toast-btn" id="cloud-toast-save">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
         <span>保存到云端</span>
       </button>
-      <button class="cloud-toast-close" id="cloud-toast-close" title="本次不保存">✕</button>
+      <button class="cloud-toast-close" id="cloud-toast-close" title="稍后自行保存">✕</button>
     </div>
 
     <!-- 右侧：图纸比对大视口 -->
@@ -44,7 +67,6 @@
       <!-- 顶部操作控制栏 -->
       <div class="preview-control-bar">
         <div class="control-group-left">
-          <!-- 新增：弹窗触发按钮（本地导入入口已隐藏，统一走图纸列表） -->
           <button class="btn btn-primary btn-small hidden" id="btn-open-import">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;">
               <path d="M12 5v14M5 12h14"/>
@@ -73,20 +95,28 @@
             </svg>
             已存子图
           </button>
-          <div class="toolbar-divider" style="height:20px; width:1px; background:#e2e8f0; margin:0 8px;"></div>
           
-          <span class="control-label">缩放</span>
-          <button class="zoom-btn" id="btn-zoom-out">−</button>
-          <input type="range" class="zoom-slider" id="zoom-slider" min="10" max="1000" value="100">
-          <button class="zoom-btn" id="btn-zoom-in">+</button>
-          <button class="control-btn" id="btn-fit-viewport">适应窗口</button>
+          <div class="toolbar-divider"></div>
+          
+          <div class="zoom-control-group">
+            <span class="control-label">缩放</span>
+            <button class="zoom-btn" id="btn-zoom-out" title="缩小视口">−</button>
+            <input type="range" class="zoom-slider" id="zoom-slider" min="10" max="1000" value="100">
+            <button class="zoom-btn" id="btn-zoom-in" title="放大视口">+</button>
+            <span class="zoom-pill" id="zoom-value" title="当前缩放比">100%</span>
+            <button class="control-btn" id="btn-fit-viewport" title="居中自适应窗口">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+              </svg>
+              <span>适应窗口</span>
+            </button>
+          </div>
         </div>
         
         <div class="control-group-right">
-          <span class="control-label">查看模式</span>
           <div class="toggle-group" id="mode-toggle-group">
             <button class="toggle-btn" id="btn-mode-single">单屏模式</button>
-            <button class="toggle-btn active" id="btn-mode-compare">对比模式</button>
+            <button class="toggle-btn active" id="btn-mode-compare">双屏对比</button>
           </div>
           
           <div class="toggle-group hidden" id="single-tabs-group">
@@ -95,9 +125,9 @@
           </div>
           
           <div class="layer-badges">
-            <span class="badge badge-lines">线条</span>
-            <span class="badge badge-curves">多段线</span>
-            <span class="badge badge-texts">文字</span>
+            <span class="badge badge-lines"><span class="badge-dot"></span>线条</span>
+            <span class="badge badge-curves"><span class="badge-dot"></span>多段线</span>
+            <span class="badge badge-texts"><span class="badge-dot"></span>文字</span>
           </div>
 
           <!-- 编辑器导出按钮 -->
@@ -110,7 +140,7 @@
             导出 DXF
           </button>
           
-          <button class="btn btn-primary btn-small hidden" id="btn-export-subgraph" title="导出选中局部节点" style="background-color: #f59e0b; border-color: #f59e0b;">
+          <button class="btn btn-warning btn-small hidden" id="btn-export-subgraph" title="导出选中局部节点">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px">
               <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/>
               <polyline points="16 6 12 2 8 6"/>
@@ -135,18 +165,53 @@
 
         <!-- 欢迎/拖拽占位面板 -->
         <div class="preview-placeholder" id="preview-placeholder">
-          <div class="drag-drop-zone">
+          <div class="drag-drop-zone" id="drag-drop-zone">
+            <!-- 矢量科技感 CAD 蓝图主图标 -->
             <div class="placeholder-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                <polyline points="14 2 14 8 20 8"/>
-                <line x1="16" y1="13" x2="8" y2="13"/>
-                <line x1="16" y1="17" x2="8" y2="17"/>
-                <polyline points="10 9 9 9 8 9"/>
+              <div class="icon-pulse-ring"></div>
+              <svg viewBox="0 0 64 64" fill="none" class="blueprint-svg">
+                <rect x="8" y="8" width="48" height="48" rx="8" stroke="url(#cyan-grad)" stroke-width="2" stroke-dasharray="4 2"/>
+                <circle cx="32" cy="32" r="14" stroke="#00f2fe" stroke-width="1.8"/>
+                <circle cx="32" cy="32" r="3" fill="#00f2fe"/>
+                <line x1="18" y1="32" x2="46" y2="32" stroke="#4facfe" stroke-width="1.5" stroke-dasharray="2 2"/>
+                <line x1="32" y1="18" x2="32" y2="46" stroke="#4facfe" stroke-width="1.5" stroke-dasharray="2 2"/>
+                <path d="M22 22 L26 22 L22 26 Z" fill="#00f2fe" opacity="0.6"/>
+                <path d="M42 42 L38 42 L42 38 Z" fill="#00f2fe" opacity="0.6"/>
+                <defs>
+                  <linearGradient id="cyan-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#00f2fe"/>
+                    <stop offset="100%" stop-color="#4facfe"/>
+                  </linearGradient>
+                </defs>
               </svg>
             </div>
-            <h2>拖拽 PDF 到此处开始</h2>
-            <p>或点击左侧侧边栏中的导入按钮</p>
+            <h2 class="placeholder-title">拖拽 PDF 图纸到此处即刻转换</h2>
+            <p class="placeholder-desc">支持高精度矢量图纸、原生圆/圆弧拟合 (CIRCLE/ARC)、文字角度旋转排版与 24 位 TrueColor</p>
+            
+            <div class="placeholder-features">
+              <span class="feature-tag">✦ 原生圆/圆弧拟合</span>
+              <span class="feature-tag">✦ 沿线文字倾斜排版</span>
+              <span class="feature-tag">✦ 24-bit TrueColor</span>
+              <span class="feature-tag">✦ GPU WebGL 视口</span>
+            </div>
+
+            <div class="placeholder-actions">
+              <button class="btn btn-primary btn-hero" id="btn-hero-open-history">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <polyline points="12 6 12 12 16 14"></polyline>
+                </svg>
+                打开图纸列表
+              </button>
+              <button class="btn btn-secondary btn-hero" id="btn-hero-select-file">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="17 8 12 3 7 8"/>
+                  <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                选择本地 PDF 导入
+              </button>
+            </div>
           </div>
         </div>
 
@@ -456,8 +521,25 @@
   <div class="modal-overlay hidden" id="history-modal">
     <div class="modal-container modal-large">
       <div class="modal-header">
-        <h2>图纸列表</h2>
-        <div style="display:flex; gap:10px; align-items:center;">
+        <div class="history-modal-header-left">
+          <h2>图纸列表</h2>
+          <span class="history-count-badge" id="history-count-badge">云端图库</span>
+        </div>
+        <div class="history-modal-header-right">
+          <div class="history-search-bar">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input type="text" id="history-search-input" placeholder="搜索图纸文件名..." autocomplete="off">
+          </div>
+          <button class="btn btn-secondary btn-icon" id="btn-refresh-history" title="刷新图纸列表">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="23 4 23 10 17 10"></polyline>
+              <polyline points="1 20 1 14 7 14"></polyline>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+            </svg>
+          </button>
           <button class="modal-close-btn" id="btn-close-history-modal">✕</button>
         </div>
       </div>
@@ -486,7 +568,10 @@
   <div class="modal-overlay hidden" id="subgraphs-modal">
     <div class="modal-container modal-large">
       <div class="modal-header">
-        <h2>已存子图</h2>
+        <div class="history-modal-header-left">
+          <h2>已存子图</h2>
+          <span class="history-count-badge">局部切片</span>
+        </div>
         <div style="display:flex; gap:10px; align-items:center;">
           <button class="modal-close-btn" id="btn-close-subgraphs-modal">✕</button>
         </div>
@@ -501,7 +586,7 @@
 
   <!-- 平台测试结果弹窗 (Modal) -->
   <div class="modal-overlay hidden" id="platform-test-modal">
-    <div class="modal-container" style="width: 520px;">
+    <div class="modal-container" style="width: 540px;">
       <div class="modal-header">
         <h2>第三方平台测试</h2>
         <button class="modal-close-btn" id="btn-close-platform-test">✕</button>
@@ -514,22 +599,22 @@
 
   <!-- 导出预览弹窗 (Modal) -->
   <div class="modal-overlay hidden" id="export-preview-modal">
-    <div class="modal-container modal-large" style="width: 80%; max-width: 900px;">
+    <div class="modal-container modal-large export-preview-container">
       <div class="modal-header">
-        <h2>预览生成的选中节点 CAD 图纸</h2>
+        <h2>预览生成的局部 CAD 子图</h2>
         <button class="modal-close-btn" id="btn-close-export-preview">✕</button>
       </div>
-      <div class="modal-body" style="padding: 10px; background: #1a1a24;">
+      <div class="modal-body export-preview-body">
         <!-- 预览画布容器 -->
-        <div class="canvas-container" style="height: 500px; width: 100%; border: 1px solid #333; border-radius: 6px; overflow: hidden; position: relative;">
-          <canvas id="preview-canvas" style="width: 100%; height: 100%;"></canvas>
+        <div class="canvas-container export-canvas-wrap">
+          <canvas id="preview-canvas"></canvas>
         </div>
       </div>
-      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; padding: 16px; background: white; border-top: 1px solid #eee; border-radius: 0 0 12px 12px;">
-        <div style="flex: 1; display: flex; align-items: center; margin-right: 20px;">
-          <input type="text" id="export-subgraph-name" placeholder="请输入图元节点名称..." class="export-name-input" style="width: 100%; padding: 10px 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='var(--primary)'" onblur="this.style.borderColor='#ccc'" />
+      <div class="modal-footer export-modal-footer">
+        <div class="export-input-wrap">
+          <input type="text" id="export-subgraph-name" placeholder="输入图元节点名称..." class="export-name-input" />
         </div>
-        <div style="display: flex; gap: 12px;">
+        <div class="export-actions">
           <button class="btn btn-secondary" id="btn-cancel-export">取消</button>
           <button class="btn btn-primary" id="btn-confirm-export">保存子图</button>
         </div>
@@ -539,12 +624,19 @@
 
   <!-- 自定义全局提示弹窗 (Custom Alert/Confirm Modal) -->
   <div class="modal-overlay hidden" id="custom-dialog-overlay" style="z-index: 9999;">
-    <div class="modal-container" style="width: 400px; padding: 24px; text-align: center;">
-      <h3 id="custom-dialog-title" style="margin-bottom: 12px; font-size: 18px;">提示</h3>
-      <p id="custom-dialog-message" style="margin-bottom: 24px; color: var(--text-muted); font-size: 14px; line-height: 1.5;"></p>
-      <div class="action-row" style="justify-content: center; gap: 16px; margin-top: 0;">
+    <div class="modal-container custom-dialog-card">
+      <div class="custom-dialog-icon" id="custom-dialog-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="8" x2="12" y2="12"></line>
+          <line x1="12" y1="16" x2="12.01" y2="16"></line>
+        </svg>
+      </div>
+      <h3 id="custom-dialog-title">提示</h3>
+      <p id="custom-dialog-message"></p>
+      <div class="action-row custom-dialog-actions">
         <button class="btn btn-secondary" id="btn-dialog-cancel">取消</button>
-        <button class="btn btn-primary" id="btn-dialog-confirm" style="min-width: 100px;">确定</button>
+        <button class="btn btn-primary" id="btn-dialog-confirm">确定</button>
       </div>
     </div>
   </div>
