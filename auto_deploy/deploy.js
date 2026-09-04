@@ -87,12 +87,25 @@ async function createRelease(tag, name, body) {
   return res.json();
 }
 
-// 上传单个文件到 GitHub Release（同名旧附件先删除再传，带重试）
-async function uploadFile(releaseId, filePath) {
+// 上传单个文件到 GitHub Release（优先使用 gh CLI 流式上传，带重试与断点保护）
+async function uploadFile(tag, releaseId, filePath) {
   const fileName = path.basename(filePath);
   const stat = fs.statSync(filePath);
 
-  // 1. 检查并删除同名旧附件
+  console.log(`[部署] 上传附件到 GitHub: ${fileName} (${(stat.size / 1024 / 1024).toFixed(1)} MB)...`);
+
+  // 1. 优先尝试使用 GitHub CLI (gh.exe)，原生支持流式断点续传与大文件分块
+  try {
+    execSync(`gh release upload ${tag} "${filePath}" --repo ${OWNER}/${REPO} --clobber`, {
+      stdio: 'inherit'
+    });
+    console.log(`[部署] 附件上传成功 (via gh CLI)!`);
+    return { name: fileName };
+  } catch (ghErr) {
+    console.warn(`[部署] gh CLI 上传失败，尝试备用 REST API 上传: ${ghErr.message}`);
+  }
+
+  // 2. 检查并删除同名旧附件
   const detailRes = await githubFetch(`/repos/${OWNER}/${REPO}/releases/${releaseId}`);
   if (detailRes.ok) {
     const detail = await detailRes.json();
@@ -104,8 +117,7 @@ async function uploadFile(releaseId, filePath) {
     }
   }
 
-  // 2. 二进制上传附件（GitHub 支持单文件最大 2GB）
-  console.log(`[部署] 上传附件到 GitHub: ${fileName} (${(stat.size / 1024 / 1024).toFixed(1)} MB)...`);
+  // 3. 备用二进制上传
   let lastErr = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -268,13 +280,12 @@ async function main() {
     console.log(`[部署] GitHub Release 创建成功 (id=${release.id})`);
   }
 
-  // 5. 上传完整安装包 与 差分增量包
-  await uploadFile(release.id, installer.file);
-
+  // 5. 上传差分增量包与完整安装包
   const patchZip = createPatchPackage(newVersion);
   if (patchZip && fs.existsSync(patchZip)) {
-    await uploadFile(release.id, patchZip);
+    await uploadFile(tag, release.id, patchZip);
   }
+  await uploadFile(tag, release.id, installer.file);
 
   // 6. 校验最新 Release
   const latestRes = await githubFetch(`/repos/${OWNER}/${REPO}/releases/latest`);
