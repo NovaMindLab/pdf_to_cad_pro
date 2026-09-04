@@ -61,6 +61,44 @@ def dedup_words(words):
     return result
 
 
+class SpatialWordIndex:
+    """
+    Fast 2D grid spatial index for detecting whether small vector strokes/curves
+    are actually SHX font character strokes that duplicate the PDF's text layer.
+    """
+    def __init__(self, words, cell_size=60.0):
+        self.cell_size = cell_size
+        self.grid = {}
+        for w in words:
+            # Word bounding box with a slight 1.0pt tolerance margin
+            wx0 = w['x0'] - 1.0
+            wx1 = w['x1'] + 1.0
+            wy0 = w['top'] - 1.0
+            wy1 = w['bottom'] + 1.0
+            w_box = (wx0, wy0, wx1, wy1)
+            gx0 = int(wx0 // cell_size)
+            gx1 = int(wx1 // cell_size)
+            gy0 = int(wy0 // cell_size)
+            gy1 = int(wy1 // cell_size)
+            for gx in range(gx0, gx1 + 1):
+                for gy in range(gy0, gy1 + 1):
+                    self.grid.setdefault((gx, gy), []).append(w_box)
+
+    def is_inside_text(self, bx0, by0, bx1, by1, max_stroke_size=35.0):
+        # Real drawing lines (borders, cables, buses, frames) are longer than 35pt
+        if (bx1 - bx0) > max_stroke_size or (by1 - by0) > max_stroke_size:
+            return False
+        gx = int(bx0 // self.cell_size)
+        gy = int(by0 // self.cell_size)
+        candidates = self.grid.get((gx, gy))
+        if not candidates:
+            return False
+        for wx0, wy0, wx1, wy1 in candidates:
+            if bx0 >= wx0 and bx1 <= wx1 and by0 >= wy0 and by1 <= wy1:
+                return True
+        return False
+
+
 def natural_text_width(text, size):
     """Estimated natural width: CJK=1em, ASCII=0.6em, space=0.3em."""
     w = 0.0
@@ -93,10 +131,6 @@ def group_words_into_lines(words, tolerance=3.0):
     for word in sorted_words:
         word_h = word['bottom'] - word['top']
         placed = False
-        # Search ALL existing lines: among lines that vertically overlap the
-        # word, pick the one whose nearest word is horizontally closest.
-        # (Choosing by max vertical overlap alone splits mixed CJK/ASCII lines
-        # whose baselines differ by ~1pt into two interleaved lines.)
         best_line = None
         best_dist = None
         for line in lines:
@@ -105,11 +139,11 @@ def group_words_into_lines(words, tolerance=3.0):
             line_h = line_bottom - line_top
             # Vertical overlap between the word and the line
             ov = min(word['bottom'], line_bottom) - max(word['top'], line_top)
-            if ov > 0.3 * min(word_h, line_h) or ov > 0.5 * max(word_h, line_h):
+            if ov > 0.4 * min(word_h, line_h):
                 # Horizontal distance to the nearest word of this line
                 dist = min(min(abs(word['x0'] - w2['x1']), abs(w2['x0'] - word['x1']))
                            for w2 in line)
-                if dist < word_h * 4 and (best_dist is None or dist < best_dist):
+                if dist < word_h * 2.5 and (best_dist is None or dist < best_dist):
                     best_dist = dist
                     best_line = line
         if best_line is not None:
@@ -141,10 +175,6 @@ def group_words_into_lines(words, tolerance=3.0):
             current_char_height = p['bottom'] - p['top']
 
             # --- Check compression-ratio compatibility ---
-            # A word's own compression = real PDF width / natural width.
-            # Mixing words with very different compression into one TEXT
-            # entity forces a single average width factor, so the compressed
-            # parts are drawn too wide and overlap neighbours. Split instead.
             p_size = p.get('size', current_char_height) or current_char_height
             p_natural = natural_text_width(p['text'], p_size)
             p_ratio = (p['x1'] - p['x0']) / p_natural if p_natural > 1e-3 else 1.0
@@ -155,11 +185,11 @@ def group_words_into_lines(words, tolerance=3.0):
                 and abs(p_ratio - cur_ratio) > 0.25 * max(p_ratio, cur_ratio)
             )
 
-            # If the horizontal gap exceeds ~0.8x character height (clearly
-            # separate words / table cells / columns), split into separate CAD
-            # text entities so every word keeps its true x position and does
-            # not overlap neighbours when drawn left-to-right from one insert.
-            if gap > current_char_height * 0.8 or ratio_mismatch:
+            # In CAD drawings, table columns / cell numbers (like 44P, 45P, 46P)
+            # have gaps > 0.35 * height or > 4.0pt. Merging them into a single TEXT
+            # causes horizontal drift and overlap with cell borders / adjacent labels.
+            max_merge_gap = min(current_char_height * 0.35, 4.0)
+            if gap > max_merge_gap or ratio_mismatch:
                 merged_lines.append({
                     'text': merged_text,
                     'x0': x0,
@@ -182,12 +212,7 @@ def group_words_into_lines(words, tolerance=3.0):
                 parts.append(p)
                 # Intelligently determine space insertion.
                 # Do not insert space if gap is very small or if either character is Chinese.
-                is_chinese = False
-                if merged_text and is_chinese_char(merged_text[-1]):
-                    is_chinese = True
-                if p['text'] and is_chinese_char(p['text'][0]):
-                    is_chinese = True
-                
+                is_chinese = bool(merged_text and is_chinese_char(merged_text[-1])) or bool(p['text'] and is_chinese_char(p['text'][0]))
                 space_str = "" if (gap < current_char_height * 0.15 or is_chinese) else " "
                 merged_text += space_str + p['text']
                 # Update bounds
@@ -252,6 +277,24 @@ def convert_pdf_to_dxf(pdf_path, dxf_path):
                 _seen_line_keys.add(key)
                 msp.add_line(p0, p1, dxfattribs={'layer': 'LINES'})
 
+            # --- 0. Prepare Text & Spatial Index ---
+            # Split rotated / oblique chars out first. Covers BOTH 90-degree
+            # vertical CJK labels AND arbitrary-angle slanted labels (fibre /
+            # cable annotations). If merged into horizontal lines, the whole
+            # slanted label gets squished into one horizontal blob (tiny width
+            # factor) that overlaps its neighbours -> ghost text.
+            rotated_chars = [c for c in page.chars if char_is_rotated(c)]
+            if rotated_chars:
+                text_page = page.filter(lambda obj: not char_is_rotated(obj))
+            else:
+                text_page = page
+
+            # Extract words with font info (horizontal text only)
+            words = text_page.extract_words(extra_attrs=["fontname", "size"])
+            # Index words spatially to filter out duplicate SHX font vector strokes
+            word_spatial_index = SpatialWordIndex(words)
+            grouped_text_lines = group_words_into_lines(words)
+
             # --- 1. Draw Lines ---
             for line in page.lines:
                 pts = line.get('pts', [])
@@ -261,6 +304,14 @@ def convert_pdf_to_dxf(pdf_path, dxf_path):
                 else:
                     x0, y0 = line['x0'], line['top']
                     x1, y1 = line['x1'], line['bottom']
+
+                # Skip if this line is an internal SHX character stroke duplicating text
+                min_x = min(x0, x1)
+                max_x = max(x0, x1)
+                min_y = min(y0, y1)
+                max_y = max(y0, y1)
+                if word_spatial_index.is_inside_text(min_x, min_y, max_x, max_y):
+                    continue
 
                 x0_cad = x0 + current_x_offset
                 y0_cad = page_h - y0
@@ -301,6 +352,16 @@ def convert_pdf_to_dxf(pdf_path, dxf_path):
             # --- 3. Draw Curves / Polylines ---
             for curve in page.curves:
                 pts = curve.get('pts', [])
+                if not pts:
+                    continue
+
+                # Skip if this curve is an internal SHX character stroke duplicating text
+                min_x = min(pt[0] for pt in pts)
+                max_x = max(pt[0] for pt in pts)
+                min_y = min(pt[1] for pt in pts)
+                max_y = max(pt[1] for pt in pts)
+                if word_spatial_index.is_inside_text(min_x, min_y, max_x, max_y):
+                    continue
                 
                 # Check for slanted thick lines represented as 4-vertex polygons
                 clean_pts = []
@@ -338,20 +399,6 @@ def convert_pdf_to_dxf(pdf_path, dxf_path):
                     msp.add_lwpolyline(vertices, dxfattribs={'layer': 'POLYLINES'})
                     
             # --- 4. Draw Texts ---
-            # Split rotated / oblique chars out first. Covers BOTH 90-degree
-            # vertical CJK labels AND arbitrary-angle slanted labels (fibre /
-            # cable annotations). If merged into horizontal lines, the whole
-            # slanted label gets squished into one horizontal blob (tiny width
-            # factor) that overlaps its neighbours -> ghost text.
-            rotated_chars = [c for c in page.chars if char_is_rotated(c)]
-            if rotated_chars:
-                text_page = page.filter(lambda obj: not char_is_rotated(obj))
-            else:
-                text_page = page
-
-            # Extract words with font info (horizontal text only)
-            words = text_page.extract_words(extra_attrs=["fontname", "size"])
-            grouped_text_lines = group_words_into_lines(words)
 
             for text_line in grouped_text_lines:
                 x = text_line['x0'] + current_x_offset
