@@ -204,6 +204,19 @@
             </div>
             <div class="canvas-container">
               <canvas id="dxf-canvas"></canvas>
+              <!-- 浮动图层控制面板 -->
+              <div class="layer-control-panel" id="layer-control-panel">
+                <div class="layer-control-header" id="layer-control-toggle" title="折叠/展开图层控制">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px;">
+                    <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+                    <polyline points="2 17 12 22 22 17"/>
+                    <polyline points="2 12 12 17 22 12"/>
+                  </svg>
+                  <span>图层控制</span>
+                  <span class="layer-count-badge" id="layer-count-badge">0</span>
+                </div>
+                <div class="layer-control-list" id="layer-control-list"></div>
+              </div>
             </div>
           </div>
         </div>

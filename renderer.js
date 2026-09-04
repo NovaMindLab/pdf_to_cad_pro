@@ -4,8 +4,23 @@ const layerColorMap = {
   'LINES': '#f3f4f6',
   'RECTS': '#d1d5db',
   'POLYLINES': '#00f2fe',
+  'CIRCLES': '#38bdf8',
+  'ARCS': '#a855f7',
   'TEXTS': '#10b981',
-  'SYMBOLS': '#f59e0b'
+  'SYMBOLS': '#f59e0b',
+  '0': '#e2e8f0'
+};
+
+const ACI_TO_HEX = {
+  1: '#ff0000',
+  2: '#ffff00',
+  3: '#00ff00',
+  4: '#00ffff',
+  5: '#0000ff',
+  6: '#ff00ff',
+  7: '#ffffff',
+  8: '#808080',
+  9: '#c0c0c0'
 };
 
 // --- THREE.JS HIGH-PERFORMANCE CAD VIEWPORT ENGINE ---
@@ -184,15 +199,17 @@ class ThreeCadEngine {
 
     if (!entities || entities.length === 0) return;
 
-    // 1. Group segments by color
-    const segmentsByColor = {};
+    this.layerMeshes = {};
+    const segmentsByLayerColor = {};
     const textEntities = [];
 
-    const addEntitySegments = (ent, parentColor = null) => {
+    const addEntitySegments = (ent, parentColor = null, parentLayer = null) => {
       if (!ent) return;
-      const color = ent.color || parentColor || (layerColorMap[ent.layer] || '#ffffff');
-      if (!segmentsByColor[color]) segmentsByColor[color] = [];
-      const segs = segmentsByColor[color];
+      const layer = ent.layer || parentLayer || '0';
+      const color = ent.color || parentColor || (layerColorMap[layer] || '#ffffff');
+      if (!segmentsByLayerColor[layer]) segmentsByLayerColor[layer] = {};
+      if (!segmentsByLayerColor[layer][color]) segmentsByLayerColor[layer][color] = [];
+      const segs = segmentsByLayerColor[layer][color];
 
       if (ent.type === 'LINE') {
         segs.push(ent.x0, ent.y0, 0, ent.x1, ent.y1, 0);
@@ -206,11 +223,35 @@ class ThreeCadEngine {
             segs.push(verts[verts.length - 1].x, verts[verts.length - 1].y, 0, verts[0].x, verts[0].y, 0);
           }
         }
-      } else if (ent.type === 'TEXT') {
+      } else if (ent.type === 'CIRCLE') {
+        const segments = Math.max(16, Math.min(64, Math.round(ent.r * 2)));
+        for (let s = 0; s < segments; s++) {
+          const a0 = (s / segments) * Math.PI * 2;
+          const a1 = ((s + 1) / segments) * Math.PI * 2;
+          segs.push(
+            ent.cx + Math.cos(a0) * ent.r, ent.cy + Math.sin(a0) * ent.r, 0,
+            ent.cx + Math.cos(a1) * ent.r, ent.cy + Math.sin(a1) * ent.r, 0
+          );
+        }
+      } else if (ent.type === 'ARC') {
+        const sRad = ((ent.startAngle || 0) * Math.PI) / 180;
+        let eRad = ((ent.endAngle || 360) * Math.PI) / 180;
+        if (eRad <= sRad) eRad += Math.PI * 2;
+        const arcAngle = eRad - sRad;
+        const segments = Math.max(8, Math.min(48, Math.round(ent.r * arcAngle)));
+        for (let s = 0; s < segments; s++) {
+          const a0 = sRad + (s / segments) * arcAngle;
+          const a1 = sRad + ((s + 1) / segments) * arcAngle;
+          segs.push(
+            ent.cx + Math.cos(a0) * ent.r, ent.cy + Math.sin(a0) * ent.r, 0,
+            ent.cx + Math.cos(a1) * ent.r, ent.cy + Math.sin(a1) * ent.r, 0
+          );
+        }
+      } else if (ent.type === 'TEXT' || ent.type === 'MTEXT') {
         textEntities.push(ent);
       } else if (ent.type === 'GROUP' && ent.children) {
         for (let i = 0; i < ent.children.length; i++) {
-          addEntitySegments(ent.children[i], ent.color || parentColor);
+          addEntitySegments(ent.children[i], ent.color || parentColor, layer);
         }
       }
     };
@@ -219,29 +260,54 @@ class ThreeCadEngine {
       addEntitySegments(entities[i]);
     }
 
-    // 2. Create GPU BufferGeometries for line segments (1 draw call per color!)
-    for (const colorHex in segmentsByColor) {
-      const segs = segmentsByColor[colorHex];
-      if (segs.length === 0) continue;
+    // 2. Create GPU BufferGeometries for line segments grouped by layer & color
+    for (const layer in segmentsByLayerColor) {
+      this.layerMeshes[layer] = [];
+      for (const colorHex in segmentsByLayerColor[layer]) {
+        const segs = segmentsByLayerColor[layer][colorHex];
+        if (segs.length === 0) continue;
 
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute('position', new THREE.Float32BufferAttribute(segs, 3));
-      
-      const material = new THREE.LineBasicMaterial({
-        color: new THREE.Color(colorHex),
-        linewidth: 1
-      });
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(segs, 3));
+        
+        const material = new THREE.LineBasicMaterial({
+          color: new THREE.Color(colorHex),
+          linewidth: 1
+        });
 
-      const lineSegments = new THREE.LineSegments(geometry, material);
-      this.dxfGroup.add(lineSegments);
+        const lineSegments = new THREE.LineSegments(geometry, material);
+        lineSegments.userData = { layer };
+        this.dxfGroup.add(lineSegments);
+        this.layerMeshes[layer].push(lineSegments);
+      }
     }
 
-    // 3. Build Text Sprites / Planes with high sharpness
+    // 3. Build Text Sprites / Planes with high sharpness and optional rotation
     for (let i = 0; i < textEntities.length; i++) {
       const t = textEntities[i];
       if (!t.text) continue;
       const sprite = this.createTextMesh(t);
-      if (sprite) this.textGroup.add(sprite);
+      if (sprite) {
+        sprite.userData = { layer: t.layer || 'TEXTS' };
+        this.textGroup.add(sprite);
+      }
+    }
+
+    if (typeof updateLayerControlUI === 'function') {
+      updateLayerControlUI(entities);
+    }
+  }
+
+  setLayerVisibility(layerName, isVisible) {
+    if (this.layerMeshes && this.layerMeshes[layerName]) {
+      this.layerMeshes[layerName].forEach(m => { m.visible = isVisible; });
+    }
+    if (this.textGroup) {
+      this.textGroup.children.forEach(m => {
+        if ((m.userData && m.userData.layer) === layerName) {
+          m.visible = isVisible;
+        }
+      });
     }
   }
 
@@ -295,8 +361,19 @@ class ThreeCadEngine {
     });
 
     const mesh = new THREE.Mesh(planeGeo, planeMat);
-    // Align bottom-left of text with (t.x, t.y) in CAD Y-up
-    mesh.position.set(t.x + worldW / 2, t.y + worldH / 2, 0.5);
+    const rotDeg = t.rotation || 0;
+    if (rotDeg !== 0) {
+      const rotRad = (rotDeg * Math.PI) / 180;
+      mesh.rotation.z = rotRad;
+      const cosA = Math.cos(rotRad);
+      const sinA = Math.sin(rotRad);
+      const cx = (worldW / 2) * cosA - (worldH / 2) * sinA;
+      const cy = (worldW / 2) * sinA + (worldH / 2) * cosA;
+      mesh.position.set(t.x + cx, t.y + cy, 0.5);
+    } else {
+      mesh.position.set(t.x + worldW / 2, t.y + worldH / 2, 0.5);
+    }
+    mesh.userData = { layer: t.layer || 'TEXTS' };
     return mesh;
   }
 
@@ -369,15 +446,75 @@ class ThreeCadEngine {
           segs.push(verts[verts.length - 1].x, verts[verts.length - 1].y, 1, verts[0].x, verts[0].y, 1);
         }
       }
-    } else if (ent.type === 'TEXT') {
+    } else if (ent.type === 'CIRCLE') {
+      const segCount = 48;
+      const r = ent.r || ent.radius || 0;
+      const cx = ent.cx !== undefined ? ent.cx : ent.x || 0;
+      const cy = ent.cy !== undefined ? ent.cy : ent.y || 0;
+      for (let i = 0; i < segCount; i++) {
+        const a1 = (i / segCount) * Math.PI * 2;
+        const a2 = ((i + 1) / segCount) * Math.PI * 2;
+        segs.push(
+          cx + r * Math.cos(a1), cy + r * Math.sin(a1), 1,
+          cx + r * Math.cos(a2), cy + r * Math.sin(a2), 1
+        );
+      }
+      if (grips) {
+        grips.push(cx, cy, 2);
+        grips.push(cx + r, cy, 2);
+        grips.push(cx - r, cy, 2);
+        grips.push(cx, cy + r, 2);
+        grips.push(cx, cy - r, 2);
+      }
+    } else if (ent.type === 'ARC') {
+      const r = ent.r || ent.radius || 0;
+      const cx = ent.cx !== undefined ? ent.cx : ent.x || 0;
+      const cy = ent.cy !== undefined ? ent.cy : ent.y || 0;
+      let startAng = ((ent.startAngle || 0) * Math.PI) / 180;
+      let endAng = ((ent.endAngle || 360) * Math.PI) / 180;
+      if (endAng <= startAng) endAng += Math.PI * 2;
+      const arcLen = endAng - startAng;
+      const segCount = Math.max(8, Math.round(32 * (arcLen / (Math.PI * 2))));
+      for (let i = 0; i < segCount; i++) {
+        const a1 = startAng + (i / segCount) * arcLen;
+        const a2 = startAng + ((i + 1) / segCount) * arcLen;
+        segs.push(
+          cx + r * Math.cos(a1), cy + r * Math.sin(a1), 1,
+          cx + r * Math.cos(a2), cy + r * Math.sin(a2), 1
+        );
+      }
+      if (grips) {
+        grips.push(cx, cy, 2);
+        grips.push(cx + r * Math.cos(startAng), cy + r * Math.sin(startAng), 2);
+        grips.push(cx + r * Math.cos(endAng), cy + r * Math.sin(endAng), 2);
+        const midAng = (startAng + endAng) / 2;
+        grips.push(cx + r * Math.cos(midAng), cy + r * Math.sin(midAng), 2);
+      }
+    } else if (ent.type === 'TEXT' || ent.type === 'MTEXT') {
       const tw = ent.tw || 20;
       const th = ent.th || 10;
-      segs.push(
-        ent.x, ent.y, 1, ent.x + tw, ent.y, 1,
-        ent.x + tw, ent.y, 1, ent.x + tw, ent.y + th, 1,
-        ent.x + tw, ent.y + th, 1, ent.x, ent.y + th, 1,
-        ent.x, ent.y + th, 1, ent.x, ent.y, 1
-      );
+      const rot = ((ent.rotation || 0) * Math.PI) / 180;
+      if (Math.abs(rot) > 1e-4) {
+        const cos = Math.cos(rot);
+        const sin = Math.sin(rot);
+        const p0x = ent.x, p0y = ent.y;
+        const p1x = ent.x + tw * cos, p1y = ent.y + tw * sin;
+        const p2x = ent.x + tw * cos - th * sin, p2y = ent.y + tw * sin + th * cos;
+        const p3x = ent.x - th * sin, p3y = ent.y + th * cos;
+        segs.push(
+          p0x, p0y, 1, p1x, p1y, 1,
+          p1x, p1y, 1, p2x, p2y, 1,
+          p2x, p2y, 1, p3x, p3y, 1,
+          p3x, p3y, 1, p0x, p0y, 1
+        );
+      } else {
+        segs.push(
+          ent.x, ent.y, 1, ent.x + tw, ent.y, 1,
+          ent.x + tw, ent.y, 1, ent.x + tw, ent.y + th, 1,
+          ent.x + tw, ent.y + th, 1, ent.x, ent.y + th, 1,
+          ent.x, ent.y + th, 1, ent.x, ent.y, 1
+        );
+      }
       if (grips) grips.push(ent.x, ent.y, 2);
     } else if (ent.type === 'GROUP' && ent.children) {
       for (let i = 0; i < ent.children.length; i++) {
@@ -604,6 +741,93 @@ class ThreeCadEngine {
 }
 
 let threeCadEngine = null;
+
+function updateLayerControlUI(entities) {
+  const panel = document.getElementById('layer-control-panel');
+  const toggle = document.getElementById('layer-control-toggle');
+  const badge = document.getElementById('layer-count-badge');
+  const list = document.getElementById('layer-control-list');
+  if (!panel || !list) return;
+
+  if (toggle && !toggle._bound) {
+    toggle.addEventListener('click', () => {
+      panel.classList.toggle('collapsed');
+    });
+    toggle._bound = true;
+  }
+
+  const layerCounts = {};
+  function walk(ent) {
+    if (!ent) return;
+    if (ent.type === 'GROUP' && ent.children) {
+      ent.children.forEach(walk);
+      return;
+    }
+    const l = ent.layer || 'LINES';
+    layerCounts[l] = (layerCounts[l] || 0) + 1;
+  }
+  (entities || []).forEach(walk);
+
+  const layers = Object.keys(layerCounts).sort();
+  if (badge) badge.textContent = String(layers.length);
+
+  if (layers.length === 0) {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = 'block';
+
+  list.innerHTML = '';
+  layers.forEach(layer => {
+    const color = layerColorMap[layer] || '#38bdf8';
+    const count = layerCounts[layer];
+
+    const item = document.createElement('div');
+    item.className = 'layer-item';
+
+    const chk = document.createElement('input');
+    chk.type = 'checkbox';
+    chk.checked = true;
+    chk.id = `layer-chk-${layer}`;
+
+    const dot = document.createElement('span');
+    dot.className = 'layer-color-dot';
+    dot.style.backgroundColor = color;
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'layer-name';
+    nameSpan.title = layer;
+    nameSpan.textContent = layer;
+
+    const countSpan = document.createElement('span');
+    countSpan.className = 'layer-item-count';
+    countSpan.style.fontSize = '10px';
+    countSpan.style.color = '#94a3b8';
+    countSpan.textContent = count;
+
+    item.appendChild(chk);
+    item.appendChild(dot);
+    item.appendChild(nameSpan);
+    item.appendChild(countSpan);
+
+    chk.addEventListener('change', (e) => {
+      e.stopPropagation();
+      if (threeCadEngine) {
+        threeCadEngine.setLayerVisibility(layer, chk.checked);
+        threeCadEngine.render();
+      }
+    });
+
+    item.addEventListener('click', (e) => {
+      if (e.target !== chk) {
+        chk.checked = !chk.checked;
+        chk.dispatchEvent(new Event('change'));
+      }
+    });
+
+    list.appendChild(item);
+  });
+}
 
 // DOM Elements
 const btnOpenImport = document.getElementById('btn-open-import');
@@ -1331,18 +1555,27 @@ function parseDxf(dxfText) {
         if (currentEntity) {
           entities.push(currentEntity);
         }
-        if (['LINE', 'LWPOLYLINE', 'TEXT'].includes(value)) {
+        if (['LINE', 'LWPOLYLINE', 'TEXT', 'MTEXT', 'CIRCLE', 'ARC'].includes(value)) {
           currentEntity = { type: value, vertices: [] };
         } else {
           currentEntity = null;
         }
       } else if (currentEntity) {
-        if (currentEntity.type === 'LINE') {
+        if (groupCode === 8) {
+          currentEntity.layer = value;
+        } else if (groupCode === 62) {
+          currentEntity.aci = parseInt(value, 10);
+          if (!currentEntity.color && ACI_TO_HEX[currentEntity.aci]) {
+            currentEntity.color = ACI_TO_HEX[currentEntity.aci];
+          }
+        } else if (groupCode === 420) {
+          const c = parseInt(value, 10);
+          currentEntity.color = '#' + c.toString(16).padStart(6, '0');
+        } else if (currentEntity.type === 'LINE') {
           if (groupCode === 10) currentEntity.x0 = parseFloat(value);
           else if (groupCode === 20) currentEntity.y0 = parseFloat(value);
           else if (groupCode === 11) currentEntity.x1 = parseFloat(value);
           else if (groupCode === 21) currentEntity.y1 = parseFloat(value);
-          else if (groupCode === 8) currentEntity.layer = value;
         } else if (currentEntity.type === 'LWPOLYLINE') {
           if (groupCode === 10) {
             currentEntity.vertices.push({ x: parseFloat(value), y: 0 });
@@ -1352,16 +1585,24 @@ function parseDxf(dxfText) {
             }
           } else if (groupCode === 70) {
             currentEntity.closed = parseInt(value, 10) === 1;
-          } else if (groupCode === 8) {
-            currentEntity.layer = value;
           }
-        } else if (currentEntity.type === 'TEXT') {
+        } else if (currentEntity.type === 'CIRCLE') {
+          if (groupCode === 10) currentEntity.cx = currentEntity.x = parseFloat(value);
+          else if (groupCode === 20) currentEntity.cy = currentEntity.y = parseFloat(value);
+          else if (groupCode === 40) currentEntity.r = currentEntity.radius = parseFloat(value);
+        } else if (currentEntity.type === 'ARC') {
+          if (groupCode === 10) currentEntity.cx = currentEntity.x = parseFloat(value);
+          else if (groupCode === 20) currentEntity.cy = currentEntity.y = parseFloat(value);
+          else if (groupCode === 40) currentEntity.r = currentEntity.radius = parseFloat(value);
+          else if (groupCode === 50) currentEntity.startAngle = parseFloat(value);
+          else if (groupCode === 51) currentEntity.endAngle = parseFloat(value);
+        } else if (currentEntity.type === 'TEXT' || currentEntity.type === 'MTEXT') {
           if (groupCode === 10) currentEntity.x = parseFloat(value);
           else if (groupCode === 20) currentEntity.y = parseFloat(value);
           else if (groupCode === 40) currentEntity.height = parseFloat(value);
           else if (groupCode === 41) currentEntity.widthFactor = parseFloat(value);
+          else if (groupCode === 50) currentEntity.rotation = parseFloat(value);
           else if (groupCode === 1) currentEntity.text = value;
-          else if (groupCode === 8) currentEntity.layer = value;
         }
       }
     }
@@ -1388,11 +1629,21 @@ function parseDxf(dxfText) {
 
   // Pre-calculate cached metrics for high-speed rendering and hit testing
   unique.forEach(ent => {
-    if (ent.type === 'TEXT') {
-      // 宽度估算需包含 DXF 宽度因子（压缩文字实际绘制宽度更窄），否则命中测试框偏大
+    if (ent.type === 'TEXT' || ent.type === 'MTEXT') {
       const wf = (ent.widthFactor && ent.widthFactor > 0.05 && ent.widthFactor < 20) ? ent.widthFactor : 1;
       ent.tw = (ent.text ? ent.text.length : 0) * (ent.height || 12) * 0.6 * wf;
       ent.th = (ent.height || 12) * 1.2;
+    }
+    if (!ent.layer) {
+      if (ent.type === 'LINE') ent.layer = 'LINES';
+      else if (ent.type === 'LWPOLYLINE') ent.layer = 'RECTS';
+      else if (ent.type === 'CIRCLE') ent.layer = 'CIRCLES';
+      else if (ent.type === 'ARC') ent.layer = 'ARCS';
+      else if (ent.type === 'TEXT' || ent.type === 'MTEXT') ent.layer = 'TEXTS';
+      else ent.layer = '0';
+    }
+    if (!ent.color) {
+      ent.color = layerColorMap[ent.layer] || '#ffffff';
     }
   });
 
@@ -1419,11 +1670,30 @@ function getBoundingBox(entities) {
         maxY = Math.max(maxY, v.y);
       });
       hasGeometry = true;
-    } else if (ent.type === 'TEXT') {
-      minX = Math.min(minX, ent.x);
-      maxX = Math.max(maxX, ent.x);
-      minY = Math.min(minY, ent.y);
-      maxY = Math.max(maxY, ent.y);
+    } else if (ent.type === 'CIRCLE') {
+      const r = ent.r || ent.radius || 0;
+      const cx = ent.cx !== undefined ? ent.cx : ent.x || 0;
+      const cy = ent.cy !== undefined ? ent.cy : ent.y || 0;
+      minX = Math.min(minX, cx - r);
+      maxX = Math.max(maxX, cx + r);
+      minY = Math.min(minY, cy - r);
+      maxY = Math.max(maxY, cy + r);
+      hasGeometry = true;
+    } else if (ent.type === 'ARC') {
+      const r = ent.r || ent.radius || 0;
+      const cx = ent.cx !== undefined ? ent.cx : ent.x || 0;
+      const cy = ent.cy !== undefined ? ent.cy : ent.y || 0;
+      minX = Math.min(minX, cx - r);
+      maxX = Math.max(maxX, cx + r);
+      minY = Math.min(minY, cy - r);
+      maxY = Math.max(maxY, cy + r);
+      hasGeometry = true;
+    } else if (ent.type === 'TEXT' || ent.type === 'MTEXT') {
+      const b = getEntityBounds(ent);
+      minX = Math.min(minX, b.minX);
+      maxX = Math.max(maxX, b.maxX);
+      minY = Math.min(minY, b.minY);
+      maxY = Math.max(maxY, b.maxY);
       hasGeometry = true;
     } else if (ent.type === 'GROUP') {
       const gb = getEntityBounds(ent);
@@ -1456,10 +1726,38 @@ function getEntityBounds(ent) {
       if (v.y < minY) minY = v.y;
       if (v.y > maxY) maxY = v.y;
     }
-  } else if (ent.type === 'TEXT') {
+  } else if (ent.type === 'CIRCLE') {
+    const r = ent.r || ent.radius || 0;
+    const cx = ent.cx !== undefined ? ent.cx : ent.x || 0;
+    const cy = ent.cy !== undefined ? ent.cy : ent.y || 0;
+    minX = cx - r; maxX = cx + r;
+    minY = cy - r; maxY = cy + r;
+  } else if (ent.type === 'ARC') {
+    const r = ent.r || ent.radius || 0;
+    const cx = ent.cx !== undefined ? ent.cx : ent.x || 0;
+    const cy = ent.cy !== undefined ? ent.cy : ent.y || 0;
+    minX = cx - r; maxX = cx + r;
+    minY = cy - r; maxY = cy + r;
+  } else if (ent.type === 'TEXT' || ent.type === 'MTEXT') {
     const tw = ent.tw || (ent.text ? ent.text.length * (ent.height || 12) * 0.6 : 0);
     const th = ent.th || ((ent.height || 12) * 1.2);
-    minX = ent.x; maxX = ent.x + tw; minY = ent.y; maxY = ent.y + th;
+    const rot = ((ent.rotation || 0) * Math.PI) / 180;
+    if (Math.abs(rot) > 1e-4) {
+      const cos = Math.cos(rot);
+      const sin = Math.sin(rot);
+      const corners = [
+        { x: ent.x, y: ent.y },
+        { x: ent.x + tw * cos, y: ent.y + tw * sin },
+        { x: ent.x + tw * cos - th * sin, y: ent.y + tw * sin + th * cos },
+        { x: ent.x - th * sin, y: ent.y + th * cos }
+      ];
+      minX = Math.min(...corners.map(c => c.x));
+      maxX = Math.max(...corners.map(c => c.x));
+      minY = Math.min(...corners.map(c => c.y));
+      maxY = Math.max(...corners.map(c => c.y));
+    } else {
+      minX = ent.x; maxX = ent.x + tw; minY = ent.y; maxY = ent.y + th;
+    }
   } else if (ent.type === 'GROUP') {
     const children = ent.children || [];
     for (let i = 0; i < children.length; i++) {
@@ -1583,6 +1881,8 @@ function buildLayerPaths() {
     'LINES': new Path2D(),
     'RECTS': new Path2D(),
     'POLYLINES': new Path2D(),
+    'CIRCLES': new Path2D(),
+    'ARCS': new Path2D(),
     'SYMBOLS': new Path2D()
   };
 
@@ -1600,6 +1900,19 @@ function buildLayerPaths() {
         p.lineTo(verts[j].x, verts[j].y);
       }
       if (ent.closed) p.closePath();
+    } else if (ent.type === 'CIRCLE') {
+      const r = ent.r || ent.radius || 0;
+      const cx = ent.cx !== undefined ? ent.cx : ent.x || 0;
+      const cy = ent.cy !== undefined ? ent.cy : ent.y || 0;
+      p.moveTo(cx + r, cy);
+      p.arc(cx, cy, r, 0, Math.PI * 2);
+    } else if (ent.type === 'ARC') {
+      const r = ent.r || ent.radius || 0;
+      const cx = ent.cx !== undefined ? ent.cx : ent.x || 0;
+      const cy = ent.cy !== undefined ? ent.cy : ent.y || 0;
+      const sRad = ((ent.startAngle || 0) * Math.PI) / 180;
+      let eRad = ((ent.endAngle || 360) * Math.PI) / 180;
+      p.arc(cx, cy, r, sRad, eRad);
     } else if (ent.type === 'GROUP' && ent.children) {
       for (let k = 0; k < ent.children.length; k++) {
         addEntToPath(ent.children[k]);
@@ -3126,7 +3439,12 @@ window.addEventListener('keydown', (e) => {
       ent.x1 += dx; ent.y1 += dy;
     } else if (ent.type === 'LWPOLYLINE') {
       ent.vertices.forEach(v => { v.x += dx; v.y += dy; });
-    } else if (ent.type === 'TEXT') {
+    } else if (ent.type === 'CIRCLE' || ent.type === 'ARC') {
+      ent.cx = (ent.cx !== undefined ? ent.cx : ent.x || 0) + dx;
+      ent.cy = (ent.cy !== undefined ? ent.cy : ent.y || 0) + dy;
+      if (ent.x !== undefined) ent.x += dx;
+      if (ent.y !== undefined) ent.y += dy;
+    } else if (ent.type === 'TEXT' || ent.type === 'MTEXT') {
       ent.x += dx; ent.y += dy;
     }
     delete ent.bounds;
@@ -3190,6 +3508,27 @@ function hitTestNode(dxfX, dxfY) {
         const d = Math.hypot(dxfX - v.x, dxfY - v.y);
         if (d < minDist) { minDist = d; bestNode = { entityIndex: i, type: 'LWPOLYLINE', nodeIndex: vIdx, x: v.x, y: v.y }; }
       }
+    } else if (ent.type === 'CIRCLE') {
+      const cx = ent.cx !== undefined ? ent.cx : ent.x || 0;
+      const cy = ent.cy !== undefined ? ent.cy : ent.y || 0;
+      const d = Math.hypot(dxfX - cx, dxfY - cy);
+      if (d < minDist) { minDist = d; bestNode = { entityIndex: i, type: 'CIRCLE', nodeIndex: 0, x: cx, y: cy }; }
+    } else if (ent.type === 'ARC') {
+      const cx = ent.cx !== undefined ? ent.cx : ent.x || 0;
+      const cy = ent.cy !== undefined ? ent.cy : ent.y || 0;
+      const r = ent.r || ent.radius || 0;
+      const d = Math.hypot(dxfX - cx, dxfY - cy);
+      if (d < minDist) { minDist = d; bestNode = { entityIndex: i, type: 'ARC', nodeIndex: 0, x: cx, y: cy }; }
+      const sRad = ((ent.startAngle || 0) * Math.PI) / 180;
+      const sx = cx + r * Math.cos(sRad);
+      const sy = cy + r * Math.sin(sRad);
+      const ds = Math.hypot(dxfX - sx, dxfY - sy);
+      if (ds < minDist) { minDist = ds; bestNode = { entityIndex: i, type: 'ARC', nodeIndex: 1, x: sx, y: sy }; }
+      const eRad = ((ent.endAngle || 360) * Math.PI) / 180;
+      const ex = cx + r * Math.cos(eRad);
+      const ey = cy + r * Math.sin(eRad);
+      const de = Math.hypot(dxfX - ex, dxfY - ey);
+      if (de < minDist) { minDist = de; bestNode = { entityIndex: i, type: 'ARC', nodeIndex: 2, x: ex, y: ey }; }
     }
   }
   return bestNode;
@@ -3252,11 +3591,47 @@ function hitTest(dxfX, dxfY) {
           return true;
         }
       }
-    } else if (ent.type === 'TEXT') {
+    } else if (ent.type === 'CIRCLE') {
+      const cx = ent.cx !== undefined ? ent.cx : ent.x || 0;
+      const cy = ent.cy !== undefined ? ent.cy : ent.y || 0;
+      const dist = Math.hypot(dxfX - cx, dxfY - cy);
+      const r = ent.r || ent.radius || 0;
+      if (Math.abs(dist - r) < threshold) return true;
+      if (r <= 25 && dist <= r) return true;
+    } else if (ent.type === 'ARC') {
+      const cx = ent.cx !== undefined ? ent.cx : ent.x || 0;
+      const cy = ent.cy !== undefined ? ent.cy : ent.y || 0;
+      const dist = Math.hypot(dxfX - cx, dxfY - cy);
+      const r = ent.r || ent.radius || 0;
+      if (Math.abs(dist - r) < threshold) {
+        let ang = (Math.atan2(dxfY - cy, dxfX - cx) * 180) / Math.PI;
+        if (ang < 0) ang += 360;
+        let s = (ent.startAngle || 0) % 360;
+        let e = (ent.endAngle || 360) % 360;
+        if (s < 0) s += 360;
+        if (e < 0) e += 360;
+        if (s <= e) {
+          if (ang >= s - 2 && ang <= e + 2) return true;
+        } else {
+          if (ang >= s - 2 || ang <= e + 2) return true;
+        }
+      }
+    } else if (ent.type === 'TEXT' || ent.type === 'MTEXT') {
       const tw = ent.tw || (ent.text ? ent.text.length * (ent.height || 12) * 0.6 : 0);
       const th = ent.th || ((ent.height || 12) * 1.2);
-      if (dxfX >= ent.x - 3 && dxfX <= ent.x + tw + 3 &&
-          dxfY >= ent.y - 3 && dxfY <= ent.y + th + 3) return true;
+      const rot = ((ent.rotation || 0) * Math.PI) / 180;
+      if (Math.abs(rot) > 1e-4) {
+        const dx = dxfX - ent.x;
+        const dy = dxfY - ent.y;
+        const cos = Math.cos(-rot);
+        const sin = Math.sin(-rot);
+        const lx = dx * cos - dy * sin;
+        const ly = dx * sin + dy * cos;
+        if (lx >= -3 && lx <= tw + 3 && ly >= -3 && ly <= th + 3) return true;
+      } else {
+        if (dxfX >= ent.x - 3 && dxfX <= ent.x + tw + 3 &&
+            dxfY >= ent.y - 3 && dxfY <= ent.y + th + 3) return true;
+      }
     } else if (ent.type === 'GROUP' && ent.children) {
       for (let j = 0; j < ent.children.length; j++) {
         if (checkHit(ent.children[j])) return true;
@@ -4263,6 +4638,18 @@ if (dxfCanvas) {
               } else if (node.type === 'LWPOLYLINE') {
                 node.ent.vertices[node.nodeIndex].x += dx;
                 node.ent.vertices[node.nodeIndex].y += dy;
+              } else if (node.type === 'CIRCLE') {
+                node.ent.cx = (node.ent.cx !== undefined ? node.ent.cx : node.ent.x || 0) + dx;
+                node.ent.cy = (node.ent.cy !== undefined ? node.ent.cy : node.ent.y || 0) + dy;
+                if (node.ent.x !== undefined) node.ent.x += dx;
+                if (node.ent.y !== undefined) node.ent.y += dy;
+              } else if (node.type === 'ARC') {
+                if (node.nodeIndex === 0) {
+                  node.ent.cx = (node.ent.cx !== undefined ? node.ent.cx : node.ent.x || 0) + dx;
+                  node.ent.cy = (node.ent.cy !== undefined ? node.ent.cy : node.ent.y || 0) + dy;
+                  if (node.ent.x !== undefined) node.ent.x += dx;
+                  if (node.ent.y !== undefined) node.ent.y += dy;
+                }
               }
             }
             if (hoveredNode) {
@@ -4548,7 +4935,12 @@ function moveEntity(entity, dx, dy) {
     for (let i = 0; i < verts.length; i++) {
       verts[i].x += dx; verts[i].y += dy;
     }
-  } else if (entity.type === 'TEXT') {
+  } else if (entity.type === 'CIRCLE' || entity.type === 'ARC') {
+    entity.cx = (entity.cx !== undefined ? entity.cx : entity.x || 0) + dx;
+    entity.cy = (entity.cy !== undefined ? entity.cy : entity.y || 0) + dy;
+    if (entity.x !== undefined) entity.x += dx;
+    if (entity.y !== undefined) entity.y += dy;
+  } else if (entity.type === 'TEXT' || entity.type === 'MTEXT') {
     entity.x += dx; entity.y += dy;
   } else if (entity.type === 'GROUP') {
     const children = entity.children || [];
@@ -4787,14 +5179,34 @@ function serializeDxfToText(entities) {
         lines.push('10', v.x.toFixed(6));
         lines.push('20', v.y.toFixed(6));
       });
-    } else if (ent.type === 'TEXT') {
-      lines.push('0', 'TEXT');
+    } else if (ent.type === 'CIRCLE') {
+      lines.push('0', 'CIRCLE');
+      lines.push('8', ent.layer || 'CIRCLES');
+      if (colorInt !== null) lines.push('420', String(colorInt));
+      lines.push('10', (ent.cx !== undefined ? ent.cx : ent.x || 0).toFixed(6));
+      lines.push('20', (ent.cy !== undefined ? ent.cy : ent.y || 0).toFixed(6));
+      lines.push('30', '0.0');
+      lines.push('40', (ent.r || ent.radius || 0).toFixed(6));
+    } else if (ent.type === 'ARC') {
+      lines.push('0', 'ARC');
+      lines.push('8', ent.layer || 'ARCS');
+      if (colorInt !== null) lines.push('420', String(colorInt));
+      lines.push('10', (ent.cx !== undefined ? ent.cx : ent.x || 0).toFixed(6));
+      lines.push('20', (ent.cy !== undefined ? ent.cy : ent.y || 0).toFixed(6));
+      lines.push('30', '0.0');
+      lines.push('40', (ent.r || ent.radius || 0).toFixed(6));
+      lines.push('50', (ent.startAngle || 0).toFixed(6));
+      lines.push('51', (ent.endAngle || 360).toFixed(6));
+    } else if (ent.type === 'TEXT' || ent.type === 'MTEXT') {
+      lines.push('0', ent.type || 'TEXT');
       lines.push('8', ent.layer || 'TEXTS');
       if (colorInt !== null) lines.push('420', String(colorInt));
       lines.push('10', ent.x.toFixed(6));
       lines.push('20', ent.y.toFixed(6));
       lines.push('30', '0.0');
       lines.push('40', (ent.height || 10).toFixed(6));
+      if (ent.rotation) lines.push('50', ent.rotation.toFixed(6));
+      if (ent.widthFactor) lines.push('41', ent.widthFactor.toFixed(6));
       lines.push('1', ent.text || '');
     }
   }

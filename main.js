@@ -235,7 +235,11 @@ ipcMain.handle('convert-pdf-to-dxf', async (event, inputPath, outputPath) => {
     if (isPackaged) {
       // Packaged Sidecar: located in Electron's resources directory
       const binName = process.platform === 'win32' ? 'pdf-converter.exe' : 'pdf-converter';
-      execCmd = path.join(process.resourcesPath, binName);
+      const candidates = [
+        path.join(process.resourcesPath, 'converter', 'dist', binName),
+        path.join(process.resourcesPath, binName)
+      ];
+      execCmd = candidates.find(p => fs.existsSync(p)) || candidates[0];
     } else {
       // Development mode
       const devWinBin = path.join(__dirname, 'converter', 'dist', 'pdf-converter.exe');

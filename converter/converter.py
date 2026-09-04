@@ -36,6 +36,176 @@ def char_is_rotated(obj):
     # flag every character as rotated.
     return abs(m[1]) > 1e-3 or abs(m[2]) > 1e-3
 
+# AutoCAD Standard ACI Color Palette
+ACI_PALETTE = {
+    1: (255, 0, 0),       # Red
+    2: (255, 255, 0),     # Yellow
+    3: (0, 255, 0),       # Green
+    4: (0, 255, 255),     # Cyan
+    5: (0, 0, 255),       # Blue
+    6: (255, 0, 255),     # Magenta
+    7: (255, 255, 255),   # White/Black
+    8: (128, 128, 128),   # Dark Gray
+    9: (192, 192, 192),   # Light Gray
+}
+
+def rgb_to_aci(r, g, b):
+    if r > 220 and g > 220 and b > 220:
+        return 7
+    if r < 35 and g < 35 and b < 35:
+        return 7
+    best_aci = 7
+    best_dist = float('inf')
+    for aci, (pr, pg, pb) in ACI_PALETTE.items():
+        d = (r - pr)**2 + (g - pg)**2 + (b - pb)**2
+        if d < best_dist:
+            best_dist = d
+            best_aci = aci
+    return best_aci
+
+def parse_pdf_color(raw_color):
+    """
+    Parses pdfplumber color (RGB, CMYK, Gray) to RGB tuple (0-255) and AutoCAD ACI color.
+    """
+    if raw_color is None:
+        return (255, 255, 255), 7
+    if isinstance(raw_color, (int, float)):
+        v = int(max(0, min(1, raw_color)) * 255)
+        return (v, v, v), (7 if v > 128 else 7)
+    if isinstance(raw_color, (list, tuple)):
+        if len(raw_color) == 1:
+            v = int(max(0, min(1, raw_color[0])) * 255)
+            return (v, v, v), (7 if v > 128 else 7)
+        elif len(raw_color) == 3:
+            r, g, b = [int(c * 255 if isinstance(c, float) and c <= 1.0 else c) for c in raw_color]
+            r = max(0, min(255, r))
+            g = max(0, min(255, g))
+            b = max(0, min(255, b))
+            return (r, g, b), rgb_to_aci(r, g, b)
+        elif len(raw_color) == 4:
+            c, m, y, k = [float(x) for x in raw_color]
+            r = int(255 * (1 - c) * (1 - k))
+            g = int(255 * (1 - m) * (1 - k))
+            b = int(255 * (1 - y) * (1 - k))
+            r = max(0, min(255, r))
+            g = max(0, min(255, g))
+            b = max(0, min(255, b))
+            return (r, g, b), rgb_to_aci(r, g, b)
+    return (255, 255, 255), 7
+
+def fit_circle(pts):
+    """
+    Detects if pts (from closed curve / bezier) form a circle.
+    Returns (cx, cy, radius) if fit is tight, else None.
+    """
+    if len(pts) < 6:
+        return None
+    if dist(pts[0], pts[-1]) > 3.0:
+        return None
+    cx = sum(p[0] for p in pts) / len(pts)
+    cy = sum(p[1] for p in pts) / len(pts)
+    radii = [math.hypot(p[0] - cx, p[1] - cy) for p in pts]
+    r_avg = sum(radii) / len(radii)
+    if r_avg < 1.0 or r_avg > 800.0:
+        return None
+    max_dev = max(abs(r - r_avg) for r in radii)
+    if max_dev / r_avg < 0.08:
+        return (cx, cy, r_avg)
+    return None
+
+def fit_arc(pts, page_h):
+    """
+    Detects if pts form a circular arc.
+    Returns (cx, cy, radius, start_angle_cad, end_angle_cad) or None.
+    """
+    if len(pts) < 5:
+        return None
+    if dist(pts[0], pts[-1]) < 3.0:
+        return None
+    p0 = pts[0]
+    p1 = pts[len(pts) // 2]
+    p2 = pts[-1]
+    d = 2 * (p0[0] * (p1[1] - p2[1]) + p1[0] * (p2[1] - p0[1]) + p2[0] * (p0[1] - p1[1]))
+    if abs(d) < 1e-5:
+        return None
+    cx = ((p0[0]**2 + p0[1]**2) * (p1[1] - p2[1]) + (p1[0]**2 + p1[1]**2) * (p2[1] - p0[1]) + (p2[0]**2 + p2[0]**2) * (p0[1] - p1[1])) / d
+    cy = ((p0[0]**2 + p0[1]**2) * (p2[0] - p1[0]) + (p1[0]**2 + p1[1]**2) * (p0[0] - p2[0]) + (p2[0]**2 + p2[0]**2) * (p1[0] - p0[0])) / d
+    r_avg = math.hypot(p0[0] - cx, p0[1] - cy)
+    if r_avg < 2.0 or r_avg > 1000.0:
+        return None
+    radii = [math.hypot(p[0] - cx, p[1] - cy) for p in pts]
+    max_dev = max(abs(r - r_avg) for r in radii)
+    if max_dev / r_avg > 0.08:
+        return None
+    ang0 = math.degrees(math.atan2((page_h - p0[1]) - (page_h - cy), p0[0] - cx)) % 360
+    ang2 = math.degrees(math.atan2((page_h - p2[1]) - (page_h - cy), p2[0] - cx)) % 360
+    ang1 = math.degrees(math.atan2((page_h - p1[1]) - (page_h - cy), p1[0] - cx)) % 360
+    def is_between_ccw(start, mid, end):
+        if start < end:
+            return start <= mid <= end
+        return mid >= start or mid <= end
+    if is_between_ccw(ang0, ang1, ang2):
+        start_deg, end_deg = ang0, ang2
+    else:
+        start_deg, end_deg = ang2, ang0
+    return (cx, cy, r_avg, start_deg, end_deg)
+
+def group_rotated_chars_into_words(chars):
+    """
+    Groups adjacent characters that share a similar rotation angle into readable text lines.
+    """
+    if not chars:
+        return []
+    clean = []
+    for c in chars:
+        m = c.get('matrix')
+        if not m:
+            continue
+        rad = math.atan2(m[1], m[0])
+        deg = round(math.degrees(rad), 1)
+        cad_deg = round((-deg) % 360, 1)
+        c['_cad_angle'] = cad_deg
+        c['_angle_rad'] = rad
+        clean.append(c)
+    clean.sort(key=lambda c: (round(c['_cad_angle'], 0), c['top'], c['x0']))
+    words = []
+    current_word = []
+    for c in clean:
+        if not c.get('text') or not c['text'].strip():
+            continue
+        if not current_word:
+            current_word.append(c)
+            continue
+        prev = current_word[-1]
+        angle_diff = abs(c['_cad_angle'] - prev['_cad_angle'])
+        if angle_diff > 180:
+            angle_diff = 360 - angle_diff
+        char_dist = dist((prev['x0'], prev['top']), (c['x0'], c['top']))
+        h = max(prev.get('size', 10), c.get('size', 10))
+        if angle_diff <= 2.0 and char_dist < h * 2.0:
+            current_word.append(c)
+        else:
+            words.append(current_word)
+            current_word = [c]
+    if current_word:
+        words.append(current_word)
+    result = []
+    for cw in words:
+        text = "".join(c['text'] for c in cw)
+        first = cw[0]
+        size = first.get('size', first['bottom'] - first['top'])
+        angle = first['_cad_angle']
+        result.append({
+            'text': text,
+            'x0': first['x0'],
+            'y0': first['top'],
+            'bottom': first['bottom'],
+            'size': size,
+            'rotation': angle,
+            'color': first.get('non_stroking_color')
+        })
+    return result
+
 def dedup_words(words):
     """
     Removes duplicate words caused by PDF double-drawing (fake bold / shadow layers):
@@ -252,6 +422,8 @@ def convert_pdf_to_dxf(pdf_path, dxf_path):
         doc.layers.new(name="RECTS", dxfattribs={"color": 7})       # White/Black
         doc.layers.new(name="TEXTS", dxfattribs={"color": 3})       # Green (ACI 3)
         doc.layers.new(name="POLYLINES", dxfattribs={"color": 4})   # Cyan (ACI 4)
+        doc.layers.new(name="CIRCLES", dxfattribs={"color": 1})     # Red (ACI 1)
+        doc.layers.new(name="ARCS", dxfattribs={"color": 2})        # Yellow (ACI 2)
         
         # Keep track of layout horizontal offset for multi-page PDF files
         current_x_offset = 0.0
@@ -262,10 +434,10 @@ def convert_pdf_to_dxf(pdf_path, dxf_path):
             page_h = page.height
 
             # 线段去重 + 坐标圆整：PDF 常有双绘/重复线段；浮点运算产生的
-            # 坐标噪声（如 124.12200000000007）会显著膨胀 DXF 文本体积。
+            # 坐标噪声会显著膨胀 DXF 文本体积。
             _seen_line_keys = set()
 
-            def add_line_dedup(p0, p1):
+            def add_line_dedup(p0, p1, aci=7, rgb=(255, 255, 255)):
                 p0 = (round(p0[0], 2), round(p0[1], 2))
                 p1 = (round(p1[0], 2), round(p1[1], 2))
                 ax, ay, bx, by = p0[0], p0[1], p1[0], p1[1]
@@ -275,27 +447,24 @@ def convert_pdf_to_dxf(pdf_path, dxf_path):
                 if key in _seen_line_keys:
                     return
                 _seen_line_keys.add(key)
-                msp.add_line(p0, p1, dxfattribs={'layer': 'LINES'})
+                dxfattribs = {'layer': 'LINES', 'color': aci}
+                if rgb != (255, 255, 255):
+                    dxfattribs['true_color'] = ezdxf.colors.rgb2int(rgb)
+                msp.add_line(p0, p1, dxfattribs=dxfattribs)
 
             # --- 0. Prepare Text & Spatial Index ---
-            # Split rotated / oblique chars out first. Covers BOTH 90-degree
-            # vertical CJK labels AND arbitrary-angle slanted labels (fibre /
-            # cable annotations). If merged into horizontal lines, the whole
-            # slanted label gets squished into one horizontal blob (tiny width
-            # factor) that overlaps its neighbours -> ghost text.
             rotated_chars = [c for c in page.chars if char_is_rotated(c)]
             if rotated_chars:
                 text_page = page.filter(lambda obj: not char_is_rotated(obj))
             else:
                 text_page = page
 
-            # Extract words with font info (horizontal text only)
-            words = text_page.extract_words(extra_attrs=["fontname", "size"])
-            # Index words spatially to filter out duplicate SHX font vector strokes
+            # Extract words with font info and original color
+            words = text_page.extract_words(extra_attrs=["fontname", "size", "non_stroking_color"])
             word_spatial_index = SpatialWordIndex(words)
             grouped_text_lines = group_words_into_lines(words)
 
-            # --- 1. Draw Lines ---
+            # --- 1. Draw Lines with Color Fidelity ---
             for line in page.lines:
                 pts = line.get('pts', [])
                 if len(pts) >= 2:
@@ -313,13 +482,14 @@ def convert_pdf_to_dxf(pdf_path, dxf_path):
                 if word_spatial_index.is_inside_text(min_x, min_y, max_x, max_y):
                     continue
 
+                rgb, aci = parse_pdf_color(line.get('stroking_color'))
                 x0_cad = x0 + current_x_offset
                 y0_cad = page_h - y0
                 x1_cad = x1 + current_x_offset
                 y1_cad = page_h - y1
-                add_line_dedup((x0_cad, y0_cad), (x1_cad, y1_cad))
+                add_line_dedup((x0_cad, y0_cad), (x1_cad, y1_cad), aci=aci, rgb=rgb)
                 
-            # --- 2. Draw Rectangles ---
+            # --- 2. Draw Rectangles with Color Fidelity ---
             for rect in page.rects:
                 x0 = rect['x0'] + current_x_offset
                 y_top = page_h - rect['top']
@@ -328,28 +498,28 @@ def convert_pdf_to_dxf(pdf_path, dxf_path):
                 
                 w = rect['x1'] - rect['x0']
                 h = rect['bottom'] - rect['top']
+                rgb, aci = parse_pdf_color(rect.get('stroking_color') or rect.get('non_stroking_color'))
                 
-                # Check if it is actually a thin line represented as a filled rectangle
                 if w <= 5.0:  # Very thin vertical line
                     x_mid = (x0 + x1) / 2
-                    add_line_dedup((x_mid, y_top), (x_mid, y_bottom))
+                    add_line_dedup((x_mid, y_top), (x_mid, y_bottom), aci=aci, rgb=rgb)
                 elif h <= 5.0:  # Very thin horizontal line
                     y_mid = (y_top + y_bottom) / 2
-                    add_line_dedup((x0, y_mid), (x1, y_mid))
+                    add_line_dedup((x0, y_mid), (x1, y_mid), aci=aci, rgb=rgb)
                 else:
-                    # closed rectangle polyline
                     vertices = [
                         (x0, y_top),
                         (x1, y_top),
                         (x1, y_bottom),
                         (x0, y_bottom)
                     ]
-                    # lwpolyline requires list of (x, y) tuples.
-                    # dxfattribs flags: 1 = closed polyline
+                    rect_attribs = {'layer': 'RECTS', 'flags': 1, 'color': aci}
+                    if rgb != (255, 255, 255):
+                        rect_attribs['true_color'] = ezdxf.colors.rgb2int(rgb)
                     msp.add_lwpolyline([(round(v[0], 2), round(v[1], 2)) for v in vertices],
-                                       dxfattribs={'layer': 'RECTS', 'flags': 1})
+                                       dxfattribs=rect_attribs)
                 
-            # --- 3. Draw Curves / Polylines ---
+            # --- 3. Draw Curves: CIRCLE & ARC Recognition ---
             for curve in page.curves:
                 pts = curve.get('pts', [])
                 if not pts:
@@ -362,6 +532,8 @@ def convert_pdf_to_dxf(pdf_path, dxf_path):
                 max_y = max(pt[1] for pt in pts)
                 if word_spatial_index.is_inside_text(min_x, min_y, max_x, max_y):
                     continue
+
+                rgb, aci = parse_pdf_color(curve.get('stroking_color') or curve.get('non_stroking_color'))
                 
                 # Check for slanted thick lines represented as 4-vertex polygons
                 clean_pts = []
@@ -376,107 +548,105 @@ def convert_pdf_to_dxf(pdf_path, dxf_path):
                     L1 = dist(clean_pts[1], clean_pts[2])
                     L2 = dist(clean_pts[2], clean_pts[3])
                     L3 = dist(clean_pts[3], clean_pts[0])
-                    
                     THICKNESS = 5.0
-                    
                     if L0 <= THICKNESS and L2 <= THICKNESS and L1 > L0 * 2 and L3 > L2 * 2:
                         m1 = get_midpoint(clean_pts[0], clean_pts[1])
                         m2 = get_midpoint(clean_pts[2], clean_pts[3])
                         m1 = (m1[0] + current_x_offset, page_h - m1[1])
                         m2 = (m2[0] + current_x_offset, page_h - m2[1])
-                        add_line_dedup(m1, m2)
+                        add_line_dedup(m1, m2, aci=aci, rgb=rgb)
                         continue
                     elif L1 <= THICKNESS and L3 <= THICKNESS and L0 > L1 * 2 and L2 > L3 * 2:
                         m1 = get_midpoint(clean_pts[1], clean_pts[2])
                         m2 = get_midpoint(clean_pts[3], clean_pts[0])
                         m1 = (m1[0] + current_x_offset, page_h - m1[1])
                         m2 = (m2[0] + current_x_offset, page_h - m2[1])
-                        add_line_dedup(m1, m2)
+                        add_line_dedup(m1, m2, aci=aci, rgb=rgb)
                         continue
 
+                # --- High-Precision CIRCLE detection ---
+                circ = fit_circle(clean_pts)
+                if circ:
+                    cx, cy, r = circ
+                    circ_attribs = {'layer': 'CIRCLES', 'color': aci}
+                    if rgb != (255, 255, 255):
+                        circ_attribs['true_color'] = ezdxf.colors.rgb2int(rgb)
+                    msp.add_circle((round(cx + current_x_offset, 2), round(page_h - cy, 2)),
+                                   round(r, 2), dxfattribs=circ_attribs)
+                    continue
+
+                # --- Smooth ARC detection ---
+                arc = fit_arc(clean_pts, page_h)
+                if arc:
+                    cx, cy, r, s_ang, e_ang = arc
+                    arc_attribs = {'layer': 'ARCS', 'color': aci}
+                    if rgb != (255, 255, 255):
+                        arc_attribs['true_color'] = ezdxf.colors.rgb2int(rgb)
+                    msp.add_arc((round(cx + current_x_offset, 2), round(page_h - cy, 2)),
+                                round(r, 2), round(s_ang, 2), round(e_ang, 2), dxfattribs=arc_attribs)
+                    continue
+
+                # General polyline fallback
                 if len(pts) >= 2:
                     vertices = [(round(x + current_x_offset, 2), round(page_h - y, 2)) for x, y in pts]
-                    msp.add_lwpolyline(vertices, dxfattribs={'layer': 'POLYLINES'})
+                    poly_attribs = {'layer': 'POLYLINES', 'color': aci}
+                    if rgb != (255, 255, 255):
+                        poly_attribs['true_color'] = ezdxf.colors.rgb2int(rgb)
+                    msp.add_lwpolyline(vertices, dxfattribs=poly_attribs)
                     
-            # --- 4. Draw Texts ---
-
+            # --- 4. Draw Horizontal Texts with True Color ---
             for text_line in grouped_text_lines:
                 x = text_line['x0'] + current_x_offset
-                # pdfplumber bottom is distance from top of page.
-                # DXF insert point for text baseline is bottom of text.
                 y = page_h - text_line['bottom']
                 text = text_line['text']
                 size = text_line['size']
 
-                # Sanitize text to remove control characters/newlines that break DXF
                 text = "".join(ch for ch in text if ch >= ' ' or ch == '\t')
-
                 if size <= 0.1:
-                    size = 8.0 # fallback
+                    size = 8.0
 
-                # Scale down height slightly to match CAD fonts aspect ratio and prevent overlaps
                 height = size * 0.75
-
-                # --- Width factor: keep the drawn width equal to the PDF's real span ---
-                # CAD-exported PDFs often contain horizontally compressed text
-                # (e.g. 2 CJK chars spanning far less than 2em). Without a width
-                # factor, CAD draws such text 2-3x wider than the original and it
-                # overlaps neighbouring labels. Compute the ratio between the
-                # real PDF span and the estimated natural text width.
+                rgb, aci = parse_pdf_color(text_line.get('non_stroking_color') or (0, 255, 0))
                 text_attribs = {
                     'layer': 'TEXTS',
                     'height': round(height, 2),
-                    'insert': (round(x, 2), round(y, 2))
+                    'insert': (round(x, 2), round(y, 2)),
+                    'color': aci
                 }
+                if rgb != (255, 255, 255):
+                    text_attribs['true_color'] = ezdxf.colors.rgb2int(rgb)
+
                 span = text_line.get('x1', 0) - text_line.get('x0', 0)
                 if span > 1e-3 and text:
                     natural_w = natural_text_width(text, height)
                     if natural_w > 1e-3:
                         width_factor = span / natural_w
-                        # Clamp to a sane range; 1.0 means no scaling needed
                         if 0.05 < width_factor < 20.0 and abs(width_factor - 1.0) > 0.02:
                             text_attribs['width'] = width_factor
 
-                # Add text entity
                 msp.add_text(text, dxfattribs=text_attribs)
 
-            # --- 4b. Rotated / vertical labels ---
-            # The renderer has no rotation support, so emit each rotated char
-            # as its own upright TEXT entity at its exact PDF position. The
-            # chars stack vertically (like traditional vertical CJK layout),
-            # stay legible and never overlap neighbouring horizontal labels.
-            emitted_rotated = []
-            for c in sorted(rotated_chars, key=lambda c: (c['top'], c['x0'])):
-                ch = c['text']
-                if not ch or not ch.strip():
+            # --- 4b. Draw Rotated / Slanted Labels with True Rotation ---
+            rotated_words = group_rotated_chars_into_words(rotated_chars)
+            for rw in rotated_words:
+                r_text = "".join(ch for ch in rw['text'] if ch >= ' ' or ch == '\t')
+                if not r_text.strip():
                     continue
-                # Char-level dedup: PDF double-drawing also happens on vertical labels
-                dup = False
-                for s in emitted_rotated[-40:]:
-                    if s['text'] != ch:
-                        continue
-                    ox = min(s['x1'], c['x1']) - max(s['x0'], c['x0'])
-                    oy = min(s['bottom'], c['bottom']) - max(s['top'], c['top'])
-                    if ox > 0 and oy > 0:
-                        a1 = (s['x1'] - s['x0']) * (s['bottom'] - s['top'])
-                        a2 = (c['x1'] - c['x0']) * (c['bottom'] - c['top'])
-                        if (ox * oy) > 0.5 * min(a1, a2):
-                            dup = True
-                            break
-                if dup:
-                    continue
-                emitted_rotated.append(c)
-
-                size = c.get('size') or (c['bottom'] - c['top'])
-                if size <= 0.1:
-                    size = 8.0
-                x = c['x0'] + current_x_offset
-                y = page_h - c['bottom']
-                msp.add_text(ch, dxfattribs={
+                r_size = rw['size'] if rw['size'] > 0.1 else 8.0
+                r_height = r_size * 0.75
+                r_x = rw['x0'] + current_x_offset
+                r_y = page_h - rw['bottom']
+                r_rgb, r_aci = parse_pdf_color(rw.get('color') or (0, 255, 0))
+                rw_attribs = {
                     'layer': 'TEXTS',
-                    'height': round(size * 0.75, 2),
-                    'insert': (round(x, 2), round(y, 2))
-                })
+                    'height': round(r_height, 2),
+                    'insert': (round(r_x, 2), round(r_y, 2)),
+                    'rotation': round(rw['rotation'], 2),
+                    'color': r_aci
+                }
+                if r_rgb != (255, 255, 255):
+                    rw_attribs['true_color'] = ezdxf.colors.rgb2int(r_rgb)
+                msp.add_text(r_text, dxfattribs=rw_attribs)
                 
             # Update layout offset for next page
             current_x_offset += page_w + page_gap

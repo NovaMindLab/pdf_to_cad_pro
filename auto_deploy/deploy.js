@@ -239,10 +239,31 @@ async function main() {
     console.log(`[部署] Release ${tag} 已存在 (id=${release.id})，复用`);
   } else {
     console.log(`[部署] 创建 GitHub Release ${tag} ...`);
+    const releaseBody = [
+      `## PDF-to-CAD Studio ${tag} 优化更新`,
+      '',
+      '### 🚀 核心转换引擎升级',
+      '- **原生几何识别**：新增 CIRCLE / ARC 曲线闭合圆与弧线智能拟合算法，杜绝多段线锯齿，极大精简 DXF 拓扑；',
+      '- **色彩与图层保真**：全面支持 24位 TrueColor (RGB) 及标准 AutoCAD ACI 色彩映射，自动建立 CIRCLES、ARCS 等语义图层；',
+      '- **文字排版与倾斜旋转**：重构字符聚类分组，修复文字重叠；精准计算旋转矩阵与 CAD 逆时针角度转换，支持线缆沿线倾斜文本；',
+      '- **智能光栅扫描件拦截**：增加扫描/纯栅格 PDF 自动告警提示，指引用户进行高保真矢量转换。',
+      '',
+      '### 🖥️ 前端 CAD 查看器增强',
+      '- **浮动图层控制面板**：新增多图层可见性开关，支持实时隐藏/展示特定图层并显示图元计数；',
+      '- **原生圆/弧/旋转文字渲染**：WebGL Three.js 引擎直接光栅化高质量几何图元，支持高亮悬停与夹点吸附拖动；',
+      '- **DXF 导出保真**：内置编辑器导出完美支持 CIRCLE、ARC 及旋转文本。',
+      '',
+      '### ⚡ 打包与极速升级瘦身',
+      '- **体积缩减**：修复双重嵌套打包，安装包体积由 189MB 缩减至 ~95MB，差分增量包缩减至 ~16MB；',
+      '- **差分极速升级**：客户端一键秒级打补丁升级，无需重新下载完整安装器。',
+      '',
+      `> 发布时间: ${new Date().toLocaleString('zh-CN')}`
+    ].join('\n');
+
     release = await createRelease(
       tag,
       `PDF-to-CAD Studio ${tag}`,
-      `## 更新内容\n\n- 版本 ${tag}\n- ⚡ 支持极速差分增量升级（补丁包仅 ~2MB）\n\n> 发布时间: ${new Date().toLocaleString('zh-CN')}`
+      releaseBody
     );
     console.log(`[部署] GitHub Release 创建成功 (id=${release.id})`);
   }
